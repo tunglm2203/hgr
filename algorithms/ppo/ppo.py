@@ -346,7 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
-    parser.add_argument('--logdir', type=str, default='../logs/trpo_test')
+    parser.add_argument('--logdir', type=str, default='../logs/ppo_test')
     args = parser.parse_args()
 
     logdir_ext = os.path.join(args.logdir + '_' + args.env)
