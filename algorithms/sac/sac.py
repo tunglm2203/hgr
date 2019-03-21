@@ -5,7 +5,7 @@ import time
 import os
 
 from tensorboardX import SummaryWriter
-from spinup.algos.sac import core
+from sac import core
 from spinup.algos.sac.core import get_vars
 from spinup.utils.logx import EpochLogger
 from tqdm import tqdm

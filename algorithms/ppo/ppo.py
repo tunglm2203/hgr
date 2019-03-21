@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 import gym
 import time
-import spinup.algos.ppo.core as core
+import core as core
 import os
 
 from tensorboardX import SummaryWriter
