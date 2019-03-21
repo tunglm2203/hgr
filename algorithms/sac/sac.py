@@ -11,10 +11,9 @@ from spinup.utils.logx import EpochLogger
 from tqdm import tqdm
 from spinup.utils.mpi_tools import mpi_statistics_scalar
 
-def tensorboard_log(tensorboard, log_dict, index):
-    assert isinstance(log_dict, dict), "log_dict must be `dict` type"
-    for key in log_dict.keys():
-        tensorboard.add_scalar(key, log_dict[key], index)
+import sys
+sys.path.append('../')
+from utils import tensorboard_log
 
 
 class ReplayBuffer:

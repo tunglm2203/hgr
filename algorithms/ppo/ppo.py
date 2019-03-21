@@ -11,10 +11,9 @@ from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from tqdm import tqdm
 
-def tensorboard_log(tensorboard, log_dict, index):
-    assert isinstance(log_dict, dict), "log_dict must be `dict` type"
-    for key in log_dict.keys():
-        tensorboard.add_scalar(key, log_dict[key], index)
+import sys
+sys.path.append('../')
+from utils import tensorboard_log
 
 class PPOBuffer:
     """

@@ -11,8 +11,9 @@ from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
 from tqdm import tqdm
-
-# from utils import tensorboard_log
+import sys
+sys.path.append('../')
+from utils import tensorboard_log
 
 EPS = 1e-8
 
