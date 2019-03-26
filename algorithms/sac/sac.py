@@ -5,7 +5,7 @@ import time
 import os
 
 from tensorboardX import SummaryWriter
-from sac import core
+import core
 from spinup.algos.sac.core import get_vars
 from spinup.utils.logx import EpochLogger
 from tqdm import tqdm
@@ -372,7 +372,7 @@ if __name__ == '__main__':
 
     from spinup.utils.run_utils import setup_logger_kwargs
 
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+    logger_kwargs = setup_logger_kwargs(exp_name=args.exp_name, seed=args.seed, data_dir=logdir_ext)
 
     sac(lambda: gym.make(args.env), actor_critic=core.mlp_actor_critic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),

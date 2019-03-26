@@ -32,4 +32,4 @@ if __name__ == '__main__':
         tensor_board = SummaryWriter(logdir_ext)
 
     logger_kwargs = setup_logger_kwargs(exp_name=args.exp_name, data_dir=logdir_ext)
-    run_policy(env, get_action, args.len, args.episodes, args.render, tensor_board)
+    run_policy(env, get_action, args.len, args.episodes, args.render, tensor_board, logger_kwargs)
