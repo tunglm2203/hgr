@@ -26,7 +26,7 @@ infos = []
 
 def main():
     env = gym.make('FetchPickAndPlace-v1')
-    numItr = 100
+    numItr = 10
     initStateSpace = "random"
 
     env.reset()
@@ -45,7 +45,8 @@ def main():
     fileName += "_" + str(numItr)
     fileName += ".npz"
     
-    np.savez_compressed(fileName, acs=actions, obs=observations, info=infos)
+    np.savez_compressed(fileName, acs=actions, obs=observations, ep_rets=ep_returns, rews=rewards,
+                        info=infos)
 
 
 def goToGoal(env, lastObs):
@@ -66,6 +67,7 @@ def goToGoal(env, lastObs):
 
     episodeAcs = []
     episodeObs = []
+    episodeRews = []
     episodeInfo = []
 
     object_oriented_goal = object_rel_pos.copy()
@@ -93,13 +95,14 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        episodeAcs.append(action)
-        episodeInfo.append(info)
         episodeObs.append(obsDataNew)
+        episodeAcs.append(action)
+        episodeRews.append(reward)
+        episodeInfo.append(info)
 
         objectPos = obsDataNew['observation'][3:6]
-        gripperPos = obsDataNew['observation'][:3]
-        gripperState = obsDataNew['observation'][9:11]
+        # gripperPos = obsDataNew['observation'][:3]
+        # gripperState = obsDataNew['observation'][9:11]
         object_rel_pos = obsDataNew['observation'][6:9]
 
     # T: this loop move gripper to grasp object
@@ -115,13 +118,14 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        episodeAcs.append(action)
-        episodeInfo.append(info)
         episodeObs.append(obsDataNew)
+        episodeAcs.append(action)
+        episodeRews.append(reward)
+        episodeInfo.append(info)
 
         objectPos = obsDataNew['observation'][3:6]
-        gripperPos = obsDataNew['observation'][:3]
-        gripperState = obsDataNew['observation'][9:11]
+        # gripperPos = obsDataNew['observation'][:3]
+        # gripperState = obsDataNew['observation'][9:11]
         object_rel_pos = obsDataNew['observation'][6:9]
 
     # T: This loop move gripper to the goal
@@ -137,14 +141,15 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        episodeAcs.append(action)
-        episodeInfo.append(info)
         episodeObs.append(obsDataNew)
+        episodeAcs.append(action)
+        episodeRews.append(reward)
+        episodeInfo.append(info)
 
         objectPos = obsDataNew['observation'][3:6]
-        gripperPos = obsDataNew['observation'][:3]
-        gripperState = obsDataNew['observation'][9:11]
-        object_rel_pos = obsDataNew['observation'][6:9]
+        # gripperPos = obsDataNew['observation'][:3]
+        # gripperState = obsDataNew['observation'][9:11]
+        # object_rel_pos = obsDataNew['observation'][6:9]
 
     # T: This loop keeps gripper in fixed position and also closes gripper
     while True:
@@ -156,21 +161,24 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        episodeAcs.append(action)
-        episodeInfo.append(info)
         episodeObs.append(obsDataNew)
+        episodeAcs.append(action)
+        episodeRews.append(reward)
+        episodeInfo.append(info)
 
-        objectPos = obsDataNew['observation'][3:6]
-        gripperPos = obsDataNew['observation'][:3]
-        gripperState = obsDataNew['observation'][9:11]
-        object_rel_pos = obsDataNew['observation'][6:9]
+        # objectPos = obsDataNew['observation'][3:6]
+        # gripperPos = obsDataNew['observation'][:3]
+        # gripperState = obsDataNew['observation'][9:11]
+        # object_rel_pos = obsDataNew['observation'][6:9]
 
         if timeStep >= env._max_episode_steps: break
 
     print("Total timesteps taken ", timeStep)
 
-    actions.append(episodeAcs)
     observations.append(episodeObs)
+    actions.append(episodeAcs)
+    rewards.append(episodeRews)
+    ep_returns.append(sum(episodeRews))
     infos.append(episodeInfo)
 
 

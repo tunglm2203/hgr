@@ -1,2 +1,4 @@
 .env/
 logs/
+algorithms_fetchenv/her/data_fetch_random_100.npz
+algorithms_fetchenv/her/experiment/__pycache__/
