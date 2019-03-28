@@ -3,7 +3,7 @@ Disclaimer: this code is highly based on trpo_mpi at @openai/baselines and @open
 '''
 
 import argparse
-import os.path as osp
+import os
 import logging
 from mpi4py import MPI
 from tqdm import tqdm
@@ -19,6 +19,10 @@ from baselines import logger
 from baselines.gail.dataset.mujoco_dset import Mujoco_Dset
 from baselines.gail.adversary import TransitionClassifier
 from gym.spaces import Box
+
+import sys
+sys.path.append('../')
+from utils import compute_success_rate
 
 
 # function to unpack observation from gym environment
@@ -86,12 +90,12 @@ def main(args):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
                                     reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=2)
     env = bench.Monitor(env, logger.get_dir() and
-                        osp.join(logger.get_dir(), "monitor.json"))
+                        os.path.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
     task_name = get_task_name(args)
-    args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
-    args.log_dir = osp.join(args.log_dir, task_name)
+    args.checkpoint_dir = os.path.join(args.checkpoint_dir, task_name)
+    args.log_dir = os.path.join(args.log_dir, task_name)
 
     if args.task == 'train':
         dataset = Mujoco_Dset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
@@ -164,7 +168,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
 
 
 def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
-           stochastic_policy, save=False, reuse=False, tensorboard=None):
+           stochastic_policy, save=False, reuse=False, tensorboard=None, logdir_running=''):
 
     # Setup network
     # ----------------------------------------
@@ -184,28 +188,40 @@ def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
     acs_list = []
     len_list = []
     ret_list = []
+    info_list = []
     for idx in tqdm(range(number_trajs)):
         traj = traj_1_generator(pi, env, timesteps_per_batch, stochastic=stochastic_policy)
-        obs, acs, ep_len, ep_ret = traj['ob'], traj['ac'], traj['ep_len'], traj['ep_ret']
+        obs, acs, ep_len, ep_ret, ep_info = traj['ob'], traj['ac'], traj['ep_len'], traj['ep_ret'], traj['info']
         obs_list.append(obs)
         acs_list.append(acs)
         len_list.append(ep_len)
         ret_list.append(ep_ret)
+        info_list.append(ep_info)
         tensorboard.add_scalar('Return_mean', traj['ep_ret'], idx)
         tensorboard.add_scalar('Return_test_mean', traj['ep_ret'], idx)
         tensorboard.add_scalar('Episode_len', traj['ep_len'], idx)
+        if 'Fetch' in env.spec.id:
+            tensorboard.add_scalar('Success_rate', compute_success_rate(info_list), idx)
+
     if stochastic_policy:
         print('stochastic policy:')
     else:
         print('deterministic policy:')
     if save:
-        filename = load_model_path.split('/')[-1] + '.' + env.spec.id
-        np.savez(filename, obs=np.array(obs_list), acs=np.array(acs_list),
-                 lens=np.array(len_list), rets=np.array(ret_list))
+        # filename = load_model_path.split('/')[-1] + '_' + env.spec.id
+        filename = os.path.join(logdir_running, env.spec.id + '_eval_BC')
+        if 'Fetch' in env.spec.id:
+            np.savez_compressed(filename, obs=np.array(obs_list), acs=np.array(acs_list),
+                                lens=np.array(len_list), rets=np.array(ret_list), info=info_list)
+        else:
+            np.savez_compressed(filename, obs=np.array(obs_list), acs=np.array(acs_list),
+                                lens=np.array(len_list), rets=np.array(ret_list))
     avg_len = sum(len_list)/len(len_list)
     avg_ret = sum(ret_list)/len(ret_list)
     print("Average length:", avg_len)
     print("Average return:", avg_ret)
+    if 'Fetch' in env.spec.id:
+        print("Success rate:", compute_success_rate(info_list))
     return avg_len, avg_ret
 
 
@@ -227,6 +243,7 @@ def traj_1_generator(pi, env, horizon, stochastic):
     rews = []
     news = []
     acs = []
+    infos = []
 
     while True:
         ac, vpred = pi.act(stochastic, ob)
@@ -234,13 +251,14 @@ def traj_1_generator(pi, env, horizon, stochastic):
         news.append(new)
         acs.append(ac)
 
-        obs_next, rew, new, _ = env.step(ac)
+        obs_next, rew, new, info = env.step(ac)
 
         # tung: 2 lines below additional to adapt w/ FetchReachEnv
         achieved_goal, desired_goal, state_next, state_prime_next = unpackObs(obs_next)
         ob = state_next
 
         rews.append(rew)
+        infos.append(info)
 
         cur_ep_ret += rew
         cur_ep_len += 1
@@ -253,7 +271,7 @@ def traj_1_generator(pi, env, horizon, stochastic):
     news = np.array(news)
     acs = np.array(acs)
     traj = {"ob": obs, "rew": rews, "new": news, "ac": acs,
-            "ep_ret": cur_ep_ret, "ep_len": cur_ep_len}
+            "ep_ret": cur_ep_ret, "ep_len": cur_ep_len, "info": infos}
     return traj
 
 

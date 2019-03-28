@@ -27,23 +27,25 @@ import os
 
 def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of Behavior Cloning")
-    parser.add_argument('--env_id', help='environment ID', default='FetchPickAndPlace-v1')
-    # parser.add_argument('--env_id', help='environment ID', default='FetchReach-v1')
-    # parser.add_argument('--env_id', help='environment ID', default='Hopper-v2')
-    parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    # parser.add_argument('--expert_path', type=str, default='data/demonstrations.npz')
-    parser.add_argument('--expert_path', type=str, default='../her/data_fetch_random_100.npz')
-    parser.add_argument('--checkpoint_dir', help='the directory to save model', default='../../logs/bc_400units')
     #  Mujoco Dataset Configuration
     parser.add_argument('--traj_limitation', type=int, default=-1)
+    parser.add_argument('--env', default='FetchPickAndPlace-v1', help='environment ID')
+    parser.add_argument('--seed', type=int, default=0, help='RNG seed')
     # Network Configuration (Using MLP Policy)
     parser.add_argument('--policy_hidden_size', type=int, default=400)
-    # for evaluatation
-    boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
-    boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=1e5)
+
+    # For training
+    parser.add_argument('--expert_path', type=str, default='../her/data_fetch_random_100.npz')
+    parser.add_argument('--logdir', type=str, default='../../logs/bc_400units',
+                        help='Directory to save (for train) or load (for test) model')
+    parser.add_argument('--BC_max_iter', type=int, default=1e5, help='Max iteration for training BC')
+
+    # for Evaluation
+    parser.add_argument('--stochastic_policy', action='store_true',
+                        help='use stochastic/deterministic policy to evaluate (default: Deterministic)')
+    parser.add_argument('--save_sample', action='store_true', help='save the trajectories or not')
     parser.add_argument('--test_only', action='store_true')
-    parser.add_argument('--n_iters', help='Number of iterations for benchmark', type=int, default=100)
+    parser.add_argument('--n_iters', type=int, default=100, help='Number of iterations for benchmark')
     return parser.parse_args()
 
 
@@ -80,34 +82,27 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
         ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'train')
         train_loss, g = lossandgrad(ob_expert, ac_expert, True)
         adam.update(g, optim_stepsize)
-        val_loss, _ = lossandgrad(ob_expert, ac_expert, True)
         if verbose and iter_so_far % val_per_iter == 0:
             ob_expert, ac_expert = dataset.get_next_batch(-1, 'val')
             val_loss, _ = lossandgrad(ob_expert, ac_expert, True)
             logger.log("Training loss: {}, Validation loss: {}".format(train_loss, val_loss))
+            tensorboard.add_scalar('Validation_loss', val_loss, iter_so_far)
         tensorboard.add_scalar('Training_loss', train_loss, iter_so_far)
-        tensorboard.add_scalar('Validation_loss', val_loss, iter_so_far)
 
-    if ckpt_dir is None:
-        savedir_fname = tempfile.TemporaryDirectory().name
-    else:
-        savedir_fname = osp.join(ckpt_dir, task_name)
+    savedir_fname = osp.join(ckpt_dir, task_name)
     U.save_state(savedir_fname)
     return savedir_fname
 
 
 def get_task_name(args):
-    # task_name = 'BC'
-    task_name = '{}'.format(args.env_id.split("-")[0])
-    # task_name += '.traj_limitation_{}'.format(args.traj_limitation)
-    # task_name += ".seed_{}".format(args.seed)
+    task_name = '{}'.format(args.env.split("-")[0])
     return task_name
 
 
 def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = gym.make(args.env_id)
+    env = gym.make(args.env)
 
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
@@ -115,43 +110,40 @@ def main(args):
     env = bench.Monitor(env, logger.get_dir() and osp.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
-    args.checkpoint_dir = args.checkpoint_dir + '_' + task_name
-    dataset = Mujoco_Dset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-
-    if not os.path.exists(args.checkpoint_dir):
-        os.makedirs(args.checkpoint_dir)
-
-    avg_len_list, avg_ret_list = [], []
 
     if not args.test_only:
-        tensorboard = SummaryWriter(args.checkpoint_dir)
+        task_name = get_task_name(args)
+        args.logdir = args.logdir + '_' + task_name
+        dataset = Mujoco_Dset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
+
+        if not os.path.exists(args.logdir):
+            os.makedirs(args.logdir)
+
+        tensorboard = SummaryWriter(args.logdir)
         learn(env,
               policy_fn,
               dataset,
               max_iters=args.BC_max_iter,
-              ckpt_dir=args.checkpoint_dir,
+              ckpt_dir=args.logdir,
               task_name=task_name,
               verbose=True, tensorboard=tensorboard)
     else:
-        args.checkpoint_dir = args.checkpoint_dir + '_test'
-        tensorboard = SummaryWriter(args.checkpoint_dir)
-        avg_len, avg_ret = runner(env,
-                                  policy_fn,
-                                  args.checkpoint_dir,
-                                  timesteps_per_batch=1024,
-                                  number_trajs=args.n_iters,
-                                  stochastic_policy=args.stochastic_policy,
-                                  save=args.save_sample,
-                                  reuse=False,
-                                  tensorboard=tensorboard)
-
-        avg_len_list.append(avg_len)
-        avg_ret_list.append(avg_ret)
-
-        np.savez_compressed(osp.join(args.checkpoint_dir, 'result_bc'), avg_len=avg_len_list, avg_ret=avg_ret_list)
-        print('Average length of {} iters: {}'.format(args.n_iters, np.mean(np.array(avg_len_list))))
-        print('Average return of {} iters: {}'.format(args.n_iters, np.mean(np.array(avg_ret_list))))
+        save_test_dir = args.logdir + '_test'
+        load_model_path = os.path.join(args.logdir, args.env.split('-')[0])
+        if not os.path.exists(save_test_dir):
+            os.makedirs(save_test_dir)
+            
+        tensorboard = SummaryWriter(save_test_dir)
+        runner(env=env,
+               policy_func=policy_fn,
+               load_model_path=load_model_path,
+               timesteps_per_batch=1024,
+               number_trajs=args.n_iters,
+               stochastic_policy=args.stochastic_policy,
+               save=args.save_sample,
+               reuse=False,
+               tensorboard=tensorboard,
+               logdir_running=save_test_dir)
 
 
 if __name__ == '__main__':

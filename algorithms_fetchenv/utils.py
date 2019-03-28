@@ -17,7 +17,11 @@ def unpack_obs(obs):
 
 
 def load_policy(fpath, itr='last', deterministic=False):
-
+    """
+    Usage: Load pretrained policy from `fpath`.
+    Return: Environment used to train and pretrained policy
+    NOTE: Only test for policy trained by spinningup
+    """
     # handle which epoch to load from
     if itr == 'last':
         saves = [int(x[11:]) for x in os.listdir(fpath) if 'simple_save' in x and len(x)>11]
@@ -54,6 +58,12 @@ def load_policy(fpath, itr='last', deterministic=False):
 
 def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, tensor_board=None,
                logger_kwargs=dict(), generate_demo=False, demo_path=None, random=False):
+    """
+        Usage: Test pretrained policy in the Environment `env`. This function can be used to
+               generate demonstration from pretrained policy.
+        Return: Environment used to train and pretrained policy
+        NOTE: Only test for policy trained by spinningup
+    """
 
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
@@ -128,11 +138,40 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
 
 
 def tensorboard_log(tensorboard, log_dict, index):
+    """ Logging information into tensorboard """
     assert isinstance(log_dict, dict), "log_dict must be `dict` type"
     for key in log_dict.keys():
         tensorboard.add_scalar(key, log_dict[key], index)
 
 
+def compute_success_rate(infos):
+    """
+    Computing success rate from LIST of `infos` get from experiment
+    NOTE: Only use for FetchEnv environments
+    """
+    n_demos = len(infos)
+    success_rate = 0.0
+    if n_demos == 0:
+        print('[WARNING] There are no demonstrations')
+        return success_rate
+
+    def is_success(info):
+        if info[-1]['is_success'] != 0.0:
+            return True
+        else:
+            return False
+
+    if 'is_success' in infos[0][0]:
+        for i in range(n_demos):
+            success_rate += float(is_success(infos[i]))
+    else:
+        print('This kind of demonstrations cannot compute success rate!')
+        return success_rate
+
+    return success_rate / n_demos
+
+
+# This main for test: load_policy(), run_policy()
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
