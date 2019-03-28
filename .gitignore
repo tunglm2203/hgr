@@ -1,8 +1,7 @@
 .env/
 logs/
 algorithms_fetchenv/her/data_fetch_random_100.npz
-algorithms_fetchenv/her/experiment/__pycache__/
-algorithms_fetchenv/imitatation_learning/data/demonstrations.npz algorithms_fetchenv/imitatation_learning/data/deterministic.trpo.Hopper.0.00.npz
 algorithms_fetchenv/imitatation_learning/data/demonstrations.npz algorithms_fetchenv/imitatation_learning/data/deterministic.trpo.Hopper.0.00.npz
 *__pycache__*
 algorithms_fetchenv/imitatation_learning/data
+.idea
