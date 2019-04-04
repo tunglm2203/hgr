@@ -115,14 +115,12 @@ for env_id in sorted(data.keys()): # for all the env ids
     print('exporting {}'.format(env_id))
     plt.clf()
 
-    for config in sorted(data[env_id].keys()): #for all the configs in env ids
+    for config in sorted(data[env_id].keys()):  #for all the configs in env ids
         xs, ys, zs = zip(*data[env_id][config])
         xs, ys, zs = pad(xs), pad(ys), pad(zs)
         assert xs.shape == ys.shape
         assert xs.shape == zs.shape
 
-        
-        
         plt.figure(1)
         plt.subplot(211)
         plt.plot(xs[0], np.nanmedian(ys, axis=0), label=config)
@@ -133,8 +131,8 @@ for env_id in sorted(data.keys()): # for all the env ids
         plt.legend()
         
         plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id + '-Qvalues')))
-        
 
+        
         plt.subplot(212)
         plt.plot(xs[0], np.nanmedian(zs, axis=0), label=config)
         plt.fill_between(xs[0], np.nanpercentile(zs, 25, axis=0), np.nanpercentile(zs, 75, axis=0), alpha=0.25)

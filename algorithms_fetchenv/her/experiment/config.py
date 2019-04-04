@@ -50,7 +50,7 @@ DEFAULT_PARAMS = {
     # normalization
     'norm_eps': 0.01,  # epsilon used for observation normalization
     'norm_clip': 5,  # normalized observations are cropped to this values
-    'bc_loss': 0, # whether or not to use the behavior cloning loss as an auxilliary loss
+    'bc_loss': 1, # whether or not to use the behavior cloning loss as an auxilliary loss
     'q_filter': 0, # whether or not a Q value filter should be used on the Actor outputs
     'num_demo': 100 # number of expert demo episodes
 }

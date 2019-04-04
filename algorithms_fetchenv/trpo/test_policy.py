@@ -41,5 +41,14 @@ if __name__ == '__main__':
     env = gym.make(args.env)
 
     logger_kwargs = setup_logger_kwargs(exp_name=args.exp_name, data_dir=logdir_ext)
-    run_policy(env, get_action, args.len, args.episodes, args.render, tensor_board, logger_kwargs,
-               args.generate_demo, args.demo_path, args.random_policy)
+    run_policy(env=env,
+               get_action=get_action,
+               max_ep_len=args.len,
+               num_episodes=args.episodes,
+               render=args.render,
+               tensor_board=tensor_board,
+               logger_kwargs=logger_kwargs,
+               generate_demo=args.generate_demo,
+               demo_path=args.demo_path,
+               random_policy=args.random_policy,
+               reward_type='dense')

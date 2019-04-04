@@ -153,64 +153,33 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     dims = config.configure_dims(params)
     policy = config.configure_ddpg(dims=dims, params=params, clip_return=clip_return)
 
-    if params['env_name'] == 'GazeboWAMemptyEnv-v1':
-        rollout_params = {
-            'exploit': False,
-            'use_target_net': False,
-            'use_demo_states': True,
-            'compute_Q': False,
-            'T': params['T'],
-            #'render': 1,
-        }
+    rollout_params = {
+        'exploit': False,
+        'use_target_net': False,
+        'use_demo_states': True,
+        'compute_Q': False,
+        'T': params['T'],
+        #'render': 1,
+    }
 
-        eval_params = {
-            'exploit': True,
-            'use_target_net': params['test_with_polyak'],
-            #'use_demo_states': False,
-            'compute_Q': True,
-            'T': params['T'],
-            'rollout_batch_size': 1,
-            #'render': 1,
-        }
+    eval_params = {
+        'exploit': True,
+        'use_target_net': params['test_with_polyak'],
+        #'use_demo_states': False,
+        'compute_Q': True,
+        'T': params['T'],
+        #'render': 1,
+    }
 
-        for name in ['T', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
-            rollout_params[name] = params[name]
-            eval_params[name] = params[name]
+    for name in ['T', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
+        rollout_params[name] = params[name]
+        eval_params[name] = params[name]
 
-        madeEnv = config.cached_make_env(params['make_env'])
-        rollout_worker = RolloutWorker(madeEnv, params['make_env'], policy, dims, logger, **rollout_params)
-        rollout_worker.seed(rank_seed)
+    rollout_worker = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **rollout_params)
+    rollout_worker.seed(rank_seed)
 
-        evaluator = RolloutWorker(madeEnv, params['make_env'], policy, dims, logger, **eval_params)
-        evaluator.seed(rank_seed)
-    else:
-        rollout_params = {
-            'exploit': False,
-            'use_target_net': False,
-            'use_demo_states': True,
-            'compute_Q': False,
-            'T': params['T'],
-            #'render': 1,
-        }
-
-        eval_params = {
-            'exploit': True,
-            'use_target_net': params['test_with_polyak'],
-            #'use_demo_states': False,
-            'compute_Q': True,
-            'T': params['T'],
-            #'render': 1,
-        }
-
-        for name in ['T', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
-            rollout_params[name] = params[name]
-            eval_params[name] = params[name]
-
-        rollout_worker = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **rollout_params)
-        rollout_worker.seed(rank_seed)
-
-        evaluator = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **eval_params)
-        evaluator.seed(rank_seed)
+    evaluator = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **eval_params)
+    evaluator.seed(rank_seed)
 
     train(logdir=logdir, policy=policy, rollout_worker=rollout_worker,
           evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
@@ -220,9 +189,8 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
 
 
 @click.command()
-@click.option('--env', type=str, default='FetchPush-v1', help='the name of the OpenAI Gym environment that you want to train on')
-#@click.option('--env', type=str, default='GazeboWAMemptyEnv-v2', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../../logs/ddpg_her_no_BC_no_Qfilter_200_epochs_10_cpus_FetchPush', help='Path to save logs. If not specified, creates a folder in /tmp/')
+@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
+@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_use_Qfilter_200_epochs_10_cpus', help='Path to save logs. If not specified, creates a folder in /tmp/')
 @click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
 @click.option('--num_cpu', type=int, default=10, help='the number of CPU cores to use (using MPI)')
 @click.option('--seed', type=int, default=0, help='the random seed used to seed both the environment and the training code')
