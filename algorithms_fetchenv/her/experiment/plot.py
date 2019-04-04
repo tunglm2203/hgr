@@ -132,6 +132,7 @@ for env_id in sorted(data.keys()): # for all the env ids
         
         plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id + '-Qvalues')))
 
+        
         plt.subplot(212)
         plt.plot(xs[0], np.nanmedian(zs, axis=0), label=config)
         plt.fill_between(xs[0], np.nanpercentile(zs, 25, axis=0), np.nanpercentile(zs, 75, axis=0), alpha=0.25)
@@ -142,6 +143,5 @@ for env_id in sorted(data.keys()): # for all the env ids
         plt.subplots_adjust(top=0.92, bottom=0.1, left=0.15, right=0.95, hspace=0.3, wspace=0.35)
 
         plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id+ '-success_rate')))
-
 
     plt.show()
