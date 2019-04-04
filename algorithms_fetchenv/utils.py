@@ -56,8 +56,9 @@ def load_policy(fpath, itr='last', deterministic=False):
     return env, get_action
 
 
-def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, tensor_board=None,
-               logger_kwargs=dict(), generate_demo=False, demo_path=None, random=False):
+def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True,
+               tensor_board=None, logger_kwargs=dict(), generate_demo=False,
+               demo_path=None, random_policy=False, reward_type='sparse'):
     """
         Usage: Test pretrained policy in the Environment `env`. This function can be used to
                generate demonstration from pretrained policy.
@@ -70,11 +71,15 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
 
+    if 'Fetch' in env.spec.id:
+        env.env.reward_type = reward_type
+
+    infos, info_e = [], []
     if generate_demo:
         assert demo_path is not None, "Must provide demo_path to save demonstrations"
         ep_rets = []
         obs, rews, acs = [], [], []
-        obs_e, rews_e, acs_e = [], [], []
+        obs_e, rews_e, acs_e  = [], [], []
 
     logger = EpochLogger(**logger_kwargs)
     o, r, d, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
@@ -86,17 +91,19 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
             env.render()
             time.sleep(1e-3)
 
-        if random:
+        if random_policy:
             a = np.random.rand(act_dim)
         else:
             a = get_action(o)
-        o_next, r, d, _ = env.step(a)
+        o_next, r, d, info = env.step(a)
         _, _, o_next, _ = unpack_obs(o_next)
 
+        info_e.append(info)
         if generate_demo:
             obs_e.append(o)
             acs_e.append(a)
             rews_e.append(r)
+
 
         ep_ret += r
         ep_len += 1
@@ -116,11 +123,14 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
                         'Episode_len': mean_len}
                 tensorboard_log(tensor_board, logs, n)
 
+            infos.append(info_e)
+            info_e = []
             if generate_demo:
                 ep_rets.append(sum(rews_e))
                 obs.append(np.array(obs_e))
                 acs.append(np.array(acs_e))
                 rews.append(np.array(rews_e))
+
                 obs_e, rews_e, acs_e = [], [], []
         else:
             o = o_next
@@ -129,12 +139,18 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True, 
         if not os.path.exists(demo_path):
             os.mkdir(demo_path)
 
-        np.savez_compressed(os.path.join(demo_path, 'demonstrations'),
-                            ep_rets=ep_rets, obs=obs, rews=rews, acs=acs)
+        if 'Fetch' in env.spec.id:
+            np.savez_compressed(os.path.join(demo_path, 'demonstrations_' + env.spec.id),
+                                ep_rets=ep_rets, obs=obs, rews=rews, acs=acs, info=infos)
+        else:
+            np.savez_compressed(os.path.join(demo_path, 'demonstrations_' + env.spec.id),
+                                ep_rets=ep_rets, obs=obs, rews=rews, acs=acs)
 
     logger.log_tabular('EpRet', with_min_and_max=True)
     logger.log_tabular('EpLen', average_only=True)
     logger.dump_tabular()
+    if 'Fetch' in env.spec.id:
+        print('Success rate: ', compute_success_rate(infos))
 
 
 def tensorboard_log(tensorboard, log_dict, index):
