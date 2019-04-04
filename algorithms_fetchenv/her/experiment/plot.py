@@ -52,13 +52,12 @@ def pad(xs, value=np.nan):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('dir', type=str)
+parser.add_argument('--dir', type=str)
 parser.add_argument('--smooth', type=int, default=1)
 args = parser.parse_args()
 
 # Load all data.
 data = {}
-args.dir = '/home/rjangir/policies/naya/' #parsing arguments not working well
 paths = [os.path.abspath(os.path.join(path, '..')) for path in glob2.glob(os.path.join(args.dir, '**', 'progress.csv'))]
 for curr_path in paths:
     if not os.path.isdir(curr_path):
@@ -133,7 +132,7 @@ for env_id in sorted(data.keys()): # for all the env ids
         plt.title(env_id)
         plt.legend()
         
-        #plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id + '-Qvalues')))
+        plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id + '-Qvalues')))
         
 
         plt.subplot(212)
@@ -147,16 +146,4 @@ for env_id in sorted(data.keys()): # for all the env ids
 
         plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id+ '-success_rate')))
 
-        #plt.figure(1)
-        
-        
-
-        #plt.figure(2)
-        
-
-
-    
-    
-
-
-    
+    plt.show()
