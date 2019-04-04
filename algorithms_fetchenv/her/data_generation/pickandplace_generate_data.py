@@ -48,7 +48,7 @@ def compute_success_rate(infos):
     return success_rate / n_demos
 
 
-def goToGoal(env, lastObs):
+def goToGoal(env, lastObs, use_with_ddpg_her):
     # goal = self.sampleGoal()
     goal = lastObs['desired_goal']
 
@@ -76,8 +76,11 @@ def goToGoal(env, lastObs):
 
     timeStep = 0
 
-    _, _, obs, _ = unpack_obs(lastObs)
-    episodeObs.append(obs)
+    if use_with_ddpg_her:
+        episodeObs.append(lastObs)
+    else:
+        _, _, obs, _ = unpack_obs(lastObs)
+        episodeObs.append(obs)
 
     # T: this loop to move gripper near to the object
     while np.linalg.norm(object_oriented_goal) >= 0.005 and timeStep <= env._max_episode_steps:
@@ -95,8 +98,11 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        _, _, obs, _ = unpack_obs(obsDataNew)
-        episodeObs.append(obs)
+        if use_with_ddpg_her:
+            episodeObs.append(obsDataNew)
+        else:
+            _, _, obs, _ = unpack_obs(obsDataNew)
+            episodeObs.append(obs)
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
@@ -117,8 +123,11 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        _, _, obs, _ = unpack_obs(obsDataNew)
-        episodeObs.append(obs)
+        if use_with_ddpg_her:
+            episodeObs.append(obsDataNew)
+        else:
+            _, _, obs, _ = unpack_obs(obsDataNew)
+            episodeObs.append(obs)
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
@@ -139,8 +148,11 @@ def goToGoal(env, lastObs):
         obsDataNew, reward, done, info = env.step(action)
         timeStep += 1
 
-        _, _, obs, _ = unpack_obs(obsDataNew)
-        episodeObs.append(obs)
+        if use_with_ddpg_her:
+            episodeObs.append(obsDataNew)
+        else:
+            _, _, obs, _ = unpack_obs(obsDataNew)
+            episodeObs.append(obs)
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
@@ -160,11 +172,19 @@ def goToGoal(env, lastObs):
         episodeRews.append(reward)
         episodeInfo.append(info)
 
-        if timeStep >= env._max_episode_steps:
-            break
+        if use_with_ddpg_her:
+            episodeObs.append(obsDataNew)
+            if timeStep >= env._max_episode_steps:
+                break
         else:
-            _, _, obs, _ = unpack_obs(obsDataNew)
-            episodeObs.append(obs)
+            if timeStep >= env._max_episode_steps:
+                break
+            else:
+                if use_with_ddpg_her:
+                    episodeObs.append(obsDataNew)
+                else:
+                    _, _, obs, _ = unpack_obs(obsDataNew)
+                    episodeObs.append(obs)
 
     print("Total timesteps taken ", timeStep)
 
@@ -172,9 +192,9 @@ def goToGoal(env, lastObs):
 
 
 def main():
+    use_with_ddpg_her = True
     env = gym.make('FetchPickAndPlace-v1')
-    numItr = 10
-    initStateSpace = "random"
+    numItr = 100
 
     env.reset()
     print("Reset!")
@@ -191,7 +211,7 @@ def main():
         # env.render()
         print("Reset!")
         print("ITERATION NUMBER ", len(actions))
-        ob, ac, rew, ret, info, time_step = goToGoal(env, obs)
+        ob, ac, rew, ret, info, time_step = goToGoal(env, obs, use_with_ddpg_her)
         if time_step == env._max_episode_steps:
             observations.append(ob)
             actions.append(ac)
@@ -199,15 +219,12 @@ def main():
             ep_returns.append(ret)
             infos.append(info)
 
-    fileName = "data_fetch"
-    fileName += "_" + initStateSpace
-    fileName += "_" + str(numItr)
+    fileName = "demonstration_FetchPickAndPlace"
 
     success_rate = compute_success_rate(infos)
 
     print('\nSuccess rate on demonstration: {}'.format(success_rate))
-
-    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations, rews=rewards, acs=actions)
+    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations, rews=rewards, acs=actions, info=infos)
 
 
 if __name__ == "__main__":
