@@ -12,10 +12,11 @@ from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, Ten
 from stable_baselines.common.vec_env import VecEnv
 from my_replay_buffer import HindsightExperientReplay
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
-from stable_baselines.sac.policies import SACPolicy
+from policies import SACPolicy
 from stable_baselines import logger
 sys.path.append('../')
-from utils import unpack_obs
+from utils import unpack_obs, compute_success_rate_from_list, compute_success_rate
+import os
 
 
 def get_vars(scope):
@@ -176,8 +177,8 @@ class SAC(OffPolicyRLModel):
                     #  Use two Q-functions to improve performance by reducing overestimation bias.
                     qf1, qf2, value_fn = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph,
                                                                      create_qf=True, create_vf=True)
-                    qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                                    policy_out, create_qf=True, create_vf=False,
+                    qf1_pi, qf2_pi, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_out,
+                                                                    create_qf=True, create_vf=False,
                                                                     reuse=True)
 
                     # Target entropy is used when learning the entropy coefficient
@@ -403,15 +404,10 @@ class SAC(OffPolicyRLModel):
                 assert action.shape == self.env.action_space.shape
 
                 new_obs, reward, done, info = self.env.step(rescaled_action)
-
                 # Store transition in the replay buffer.
                 # tung: Add to replay buffer
-                self.replay_buffer.add(obs_t=obs['observation'],
-                                       action=action,
-                                       desired_goal=obs['desired_goal'],
-                                       achieved_goal=obs['achieved_goal'],
-                                       done=done,
-                                       info=info)
+                self.replay_buffer.add(obs['observation'], obs['desired_goal'], obs['achieved_goal'],
+                                       action, done, info)
                 obs = new_obs
 
                 # Retrieve reward and episode length if using Monitor wrapper
@@ -452,7 +448,7 @@ class SAC(OffPolicyRLModel):
                     self.replay_buffer.add(obs_t=obs['observation'],
                                            action=-1,
                                            desired_goal=-1,
-                                           achieved_goal=-1,
+                                           achieved_goal=obs['achieved_goal'],
                                            done=-1,
                                            info=-1)
                     if not isinstance(self.env, VecEnv):
@@ -482,6 +478,28 @@ class SAC(OffPolicyRLModel):
                         for (name, val) in zip(self.infos_names, infos_values):
                             logger.logkv(name, val)
                     logger.logkv("total timesteps", self.num_timesteps)
+                    if self.replay_buffer.current_n_episodes > 50:
+                        logger.logkv("Train success rate",
+                                     compute_success_rate_from_list(self.replay_buffer._storage['info_is_success']
+                                     [self.replay_buffer._next_episode_idx - 50:self.replay_buffer._next_episode_idx]))
+                    # tung: modify interval for test
+                    if len(episode_rewards) % 10 == 0:
+                        env_test = gym.make(self.env.spec.id)
+                        env_test = gym.wrappers.FlattenDictWrapper(env_test, ['observation', 'desired_goal'])
+                        obs_test = env_test.reset()
+                        infos_test, info_ep_test = [], []
+                        for _ in range(10):
+                            while True:
+                                action_test, _ = model.predict(obs_test)
+                                obs_test, rewards_test, done_test, info_test = env_test.step(action_test)
+                                info_ep_test.append(info_test)
+                                if done_test:
+                                    infos_test.append(info_ep_test)
+                                    info_ep_test = []
+                                    break
+
+                        logger.logkv("TEST SUCCESS RATE", compute_success_rate(infos_test))
+
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []
@@ -567,6 +585,17 @@ class SAC(OffPolicyRLModel):
         return model
 
 
+from policies import FeedForwardPolicy
+
+
+class CustomSACPolicy(FeedForwardPolicy):
+    def __init__(self, *args, **kwargs):
+        super(CustomSACPolicy, self).__init__(*args, **kwargs,
+                                              layers=[400, 300],
+                                              layer_norm=False,
+                                              feature_extraction="mlp")
+
+
 if __name__ == '__main__':
     import gym
     import numpy as np
@@ -575,24 +604,30 @@ if __name__ == '__main__':
     from policies import MlpPolicy
 
     env = gym.make('FetchPickAndPlace-v1')
-    env.seed(0)
     env = gym.wrappers.FlattenDictWrapper(env, ['observation', 'desired_goal'])
-    tf.set_random_seed(0)
-    np.random.seed(0)
 
     # env = DummyVecEnv([lambda: env])
+    save_dir = os.path.join('logs', 'sac_her_' + env.spec.id.split('-')[0])
+    save_filename = os.path.join(save_dir, 'sac_' + env.spec.id.split('-')[0])
 
-    model = SAC(MlpPolicy, env, verbose=1,
-                tensorboard_log='./logs/test_sac_her')
-    model.learn(total_timesteps=50000, log_interval=1)  #tung: log_interval=10
-    model.save("sac_pendulum")
+    model = SAC(CustomSACPolicy, env, verbose=1,
+                tensorboard_log=save_dir,
+                learning_rate=1e-3,
+                batch_size=256,
+                tau=0.005,
+                target_entropy=0.1,
+                ent_coef=0.1)
+
+    model.learn(total_timesteps=50000, log_interval=2)
+    model.save(save_filename)
 
     del model  # remove to demonstrate saving and loading
-
-    model = SAC.load("sac_pendulum")
+    model = SAC.load(save_filename, env)
 
     obs = env.reset()
     while True:
         action, _states = model.predict(obs)
         obs, rewards, dones, info = env.step(action)
         env.render()
+        if dones:
+            obs = env.reset()
