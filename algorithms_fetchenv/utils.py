@@ -162,13 +162,13 @@ def tensorboard_log(tensorboard, log_dict, index):
 
 def compute_success_rate(infos):
     """
-    Computing success rate from LIST of `infos` get from experiment
+    Computing success rate from LIST of dict `infos` get from experiment
     NOTE: Only use for FetchEnv environments
     """
     n_demos = len(infos)
     success_rate = 0.0
     if n_demos == 0:
-        print('[WARNING] There are no demonstrations')
+        print('[AIM-WARNING] There are no demonstrations')
         return success_rate
 
     def is_success(info):
@@ -181,8 +181,31 @@ def compute_success_rate(infos):
         for i in range(n_demos):
             success_rate += float(is_success(infos[i]))
     else:
-        print('This kind of demonstrations cannot compute success rate!')
+        print('[AIM-WARNING] This kind of demonstrations cannot compute success rate!')
         return success_rate
+
+    return success_rate / n_demos
+
+
+def compute_success_rate_from_list(infos):
+    """
+    Computing success rate from LIST of `infos` get from experiment
+    NOTE: Only use for FetchEnv environments
+    """
+    n_demos = len(infos)
+    success_rate = 0.0
+    if n_demos == 0:
+        print('[AIM-WARNING] There are no demonstrations')
+        return success_rate
+
+    def is_success(info):
+        if info[-1] != 0.0:
+            return True
+        else:
+            return False
+
+    for i in range(n_demos):
+        success_rate += float(is_success(infos[i]))
 
     return success_rate / n_demos
 
