@@ -5,3 +5,5 @@ algorithms_fetchenv/imitatation_learning/data/demonstrations.npz algorithms_fetc
 *__pycache__*
 algorithms_fetchenv/imitatation_learning/data
 .idea
+*.npz
+*.pkl
