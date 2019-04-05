@@ -10,10 +10,12 @@ import tensorflow as tf
 from stable_baselines.a2c.utils import find_trainable_variables, total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
-from stable_baselines.deepq.replay_buffer import ReplayBuffer
+from my_replay_buffer import HindsightExperientReplay
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.policies import SACPolicy
 from stable_baselines import logger
+sys.path.append('../')
+from utils import unpack_obs
 
 
 def get_vars(scope):
@@ -122,6 +124,8 @@ class SAC(OffPolicyRLModel):
         if _init_setup_model:
             self.setup_model()
 
+        self.env = gym.make(self.env.spec.id)
+
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
         # Rescale
@@ -137,7 +141,8 @@ class SAC(OffPolicyRLModel):
                     n_cpu //= 2
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
 
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                # tung: related to replay buffer
+                self.replay_buffer = HindsightExperientReplay(self.buffer_size, env.spec.id)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
@@ -315,6 +320,7 @@ class SAC(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
+        # tung: Sample from replay buffer
         batch = self.replay_buffer.sample(self.batch_size)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
@@ -389,7 +395,8 @@ class SAC(OffPolicyRLModel):
                     # No need to rescale when sampling random action
                     rescaled_action = action
                 else:
-                    action = self.policy_tf.step(obs[None], deterministic=False).flatten()
+                    _, _, o, _ = unpack_obs(obs)
+                    action = self.policy_tf.step(o[None], deterministic=False).flatten()
                     # Rescale from [-1, 1] to the correct bounds
                     rescaled_action = action * np.abs(self.action_space.low)
 
@@ -398,7 +405,13 @@ class SAC(OffPolicyRLModel):
                 new_obs, reward, done, info = self.env.step(rescaled_action)
 
                 # Store transition in the replay buffer.
-                self.replay_buffer.add(obs, action, reward, new_obs, float(done))
+                # tung: Add to replay buffer
+                self.replay_buffer.add(obs_t=obs['observation'],
+                                       action=action,
+                                       desired_goal=obs['desired_goal'],
+                                       achieved_goal=obs['achieved_goal'],
+                                       done=done,
+                                       info=info)
                 obs = new_obs
 
                 # Retrieve reward and episode length if using Monitor wrapper
@@ -417,7 +430,8 @@ class SAC(OffPolicyRLModel):
                     mb_infos_vals = []
                     # Update policy, critics and target networks
                     for grad_step in range(self.gradient_steps):
-                        if self.num_timesteps < self.batch_size or self.num_timesteps < self.learning_starts:
+                        if self.replay_buffer.current_n_episodes * self.replay_buffer.horizon < self.batch_size or \
+                                self.num_timesteps < self.learning_starts:
                             break
                         n_updates += 1
                         # Compute current learning_rate
@@ -435,6 +449,12 @@ class SAC(OffPolicyRLModel):
 
                 episode_rewards[-1] += reward
                 if done:
+                    self.replay_buffer.add(obs_t=obs['observation'],
+                                           action=-1,
+                                           desired_goal=-1,
+                                           achieved_goal=-1,
+                                           done=-1,
+                                           info=-1)
                     if not isinstance(self.env, VecEnv):
                         obs = self.env.reset()
                     episode_rewards.append(0.0)
@@ -545,3 +565,34 @@ class SAC(OffPolicyRLModel):
         model.sess.run(restores)
 
         return model
+
+
+if __name__ == '__main__':
+    import gym
+    import numpy as np
+
+    from stable_baselines.common.vec_env import DummyVecEnv
+    from policies import MlpPolicy
+
+    env = gym.make('FetchPickAndPlace-v1')
+    env.seed(0)
+    env = gym.wrappers.FlattenDictWrapper(env, ['observation', 'desired_goal'])
+    tf.set_random_seed(0)
+    np.random.seed(0)
+
+    # env = DummyVecEnv([lambda: env])
+
+    model = SAC(MlpPolicy, env, verbose=1,
+                tensorboard_log='./logs/test_sac_her')
+    model.learn(total_timesteps=50000, log_interval=1)  #tung: log_interval=10
+    model.save("sac_pendulum")
+
+    del model  # remove to demonstrate saving and loading
+
+    model = SAC.load("sac_pendulum")
+
+    obs = env.reset()
+    while True:
+        action, _states = model.predict(obs)
+        obs, rewards, dones, info = env.step(action)
+        env.render()
