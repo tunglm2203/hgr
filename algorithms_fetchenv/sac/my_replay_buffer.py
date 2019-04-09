@@ -16,9 +16,11 @@ class HindsightExperientReplay(object):
     def __init__(self, size, env_name='FetchPickAndPlace-v1', replay_strategy='future', replay_k=4):
         """
         Create HindsightExperientReplay buffer.
+        NOTE: The transitions in episode including reset, so if horizon is T, the number of
+        observations is T+1, number of (actions, rewards, infos is T).
 
-        :param size: (int)  Max number of transitions to store in the buffer. When the buffer overflows the old
-            memories are dropped.
+        :param size: (int)  Max number of transitions to store in the buffer.
+        When the buffer overflows the old memories are dropped.
         """
 
         def make_env():
@@ -118,6 +120,20 @@ class HindsightExperientReplay(object):
         dones = np.array(transitions['done'])
 
         return obses_t, actions, rewards, obses_tp1, dones
+
+    def get_last_episodes(self, n, key):
+        """
+        Get n last episodes in buffer
+        :param n: Number of episodes want to get
+        :param key: Should be one of ['o', 'u', 'g', 'done', 'info_is_success', 'ag']
+        :return:
+        """
+        assert key == 'o' or key == 'u' or key == 'g' or key == 'done' or key == 'info_is_success' or key == 'ag', \
+            print('[AIM-ERROR] Do not support this key: %s' % key)
+        if self.current_n_episodes > n:
+            return self._storage[key][self._next_episode_idx-n:self._next_episode_idx]
+        else:
+            return None
 
 
 def cached_make_env(make_env):

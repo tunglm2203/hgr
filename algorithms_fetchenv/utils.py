@@ -210,6 +210,14 @@ def compute_success_rate_from_list(infos):
     return success_rate / n_demos
 
 
+def success_rate_logger(tag="Train_success_rate", value=None, writer=None, steps=0):
+    with tf.variable_scope("environment_info", reuse=True):
+        # tung: This module only support 1 environment
+        if value is not None:
+            summary_1 = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value)])
+            writer.add_summary(summary_1, steps)
+
+
 # This main for test: load_policy(), run_policy()
 if __name__ == '__main__':
     import argparse
