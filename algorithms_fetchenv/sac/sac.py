@@ -15,8 +15,10 @@ from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from policies import SACPolicy
 from stable_baselines import logger
 sys.path.append('../')
-from utils import unpack_obs, compute_success_rate_from_list, compute_success_rate
+from utils import unpack_obs, compute_success_rate_from_list, compute_success_rate, my_tensorboard_logger
 import os
+from tqdm import tqdm
+import pickle
 
 
 def get_vars(scope):
@@ -68,7 +70,9 @@ class SAC(OffPolicyRLModel):
                  learning_starts=100, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
                  gradient_steps=1, target_entropy='auto', verbose=0, tensorboard_log=None,
-                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
+                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False,
+                 use_bc=False, use_q_filter=False,
+                 demo_batchsize=0, demo_file='', load_from_pickle=False, pickle_file=''):
 
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -122,6 +126,17 @@ class SAC(OffPolicyRLModel):
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
 
+        self.use_bc = use_bc
+        self.use_q_filter = use_q_filter
+        if use_bc:
+            self.load_from_pickle = load_from_pickle
+            self.pickle_file = pickle_file
+            self.bc_coef = 0.001
+            self.demo_buffer = None
+            self.cloning_loss = None
+            self.demo_batchsize = demo_batchsize
+            self._init_demonstration(demo_file, load_from_pickle, pickle_file)
+
         if _init_setup_model:
             self.setup_model()
 
@@ -132,6 +147,71 @@ class SAC(OffPolicyRLModel):
         # Rescale
         deterministic_action = self.deterministic_action * np.abs(self.action_space.low)
         return policy.obs_ph, self.actions_ph, deterministic_action
+
+    def _init_demonstration(self, demo_file, from_obj_pickle=False, pickle_file=''):
+        """
+        Initialize demonstration buffer
+        NOTE: Only using for Fetch Environment
+        :param demo_file: Path to the demonstration file
+        """
+
+        print('[AIM-NOTIFY] Initializing demonstration buffer...')
+        # dict_key of demo_data: ['ep_rets', 'obs', 'rews', 'acs', 'info']
+        if not os.path.exists(demo_file):
+            print('[AIM-ERROR] The demonstration file is not exist.')
+            exit()
+
+        demo_data = np.load(demo_file)
+        assert demo_data['ep_rets'].shape[0] == demo_data['obs'].shape[0] == \
+               demo_data['rews'].shape[0] == demo_data['acs'].shape[0] == demo_data['info'].shape[0], \
+            print('[AIM-ERROR] The number of demonstrations is not equal in each field.')
+
+        assert demo_data['acs'].shape[0] == demo_data['rews'].shape[0] == demo_data['info'].shape[0],\
+            print('[AIM-ERROR] The number of transitions (acs, rews, info) in each episode not equal.')
+
+        n_demos = demo_data['ep_rets'].shape[0]
+        n_transition_per_episode = demo_data['rews'].shape[1]
+
+        assert demo_data['obs'].shape[1] == n_transition_per_episode + 1, \
+            print('[AIM-ERROR] The observation in demonstration not including terminal state.')
+
+        demo_buff_size = n_demos * n_transition_per_episode
+        self.demo_buffer = HindsightExperientReplay(demo_buff_size, env.spec.id)
+
+        if from_obj_pickle:
+            pickle_in = open(pickle_file, "rb")
+            _data = pickle.load(pickle_in)
+            self.demo_buffer._storage = _data.copy()
+            self.demo_buffer.current_n_episodes = len(_data['u'])
+            del _data
+        else:
+            # Read and store all demonstrations into self.demo_buffer
+            for ep_idx in tqdm(range(n_demos)):
+                # Store from `start state` to `terminal state - 1`
+                for t in range(n_transition_per_episode):
+                    if t < n_transition_per_episode - 1:
+                        self.demo_buffer.add(demo_data['obs'][ep_idx][t]['observation'],
+                                             demo_data['obs'][ep_idx][t]['desired_goal'],
+                                             demo_data['obs'][ep_idx][t]['achieved_goal'],
+                                             np.array([1.0, 1.0, 1.0, 1.0]), # demo_data['acs'][ep_idx][t]
+                                             False,
+                                             demo_data['info'][ep_idx][t])
+                    else:
+                        self.demo_buffer.add(demo_data['obs'][ep_idx][t]['observation'],
+                                             demo_data['obs'][ep_idx][t]['desired_goal'],
+                                             demo_data['obs'][ep_idx][t]['achieved_goal'],
+                                             np.array([1.0, 1.0, 1.0, 1.0]), #demo_data['acs'][ep_idx][t]
+                                             True,
+                                             demo_data['info'][ep_idx][t])
+                # Push `last state` into demo_buffer
+                self.demo_buffer.add(demo_data['obs'][ep_idx][t + 1]['observation'],
+                                     -1, -1,
+                                     demo_data['obs'][ep_idx][t + 1]['achieved_goal'],
+                                     -1, -1)
+            with open('demonstration_buffer.pkl', 'wb') as f:
+                pickle.dump(self.demo_buffer._storage, f)
+
+        print('[AIM-NOTIFY] Initialize demonstration buffer done.')
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
@@ -240,7 +320,33 @@ class SAC(OffPolicyRLModel):
 
                     # Compute the policy loss
                     # Alternative: policy_kl_loss = tf.reduce_mean(logp_pi - min_qf_pi)
-                    policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
+                    if self.use_bc:
+                        mask = np.concatenate(
+                            (np.zeros(self.batch_size - self.demo_batchsize), np.ones(self.demo_batchsize)), axis=0)
+                        if self.use_q_filter:
+                            mask_q_filter = tf.reshape(tf.boolean_mask(qf1 > qf1_pi, mask), [-1])    #tung: should use qf1 > qf1_pi or min(qf1, qf2) > qf1_pi ?
+
+                            self.cloning_loss = tf.reduce_sum(
+                                tf.square(
+                                    tf.boolean_mask(tf.boolean_mask(self.deterministic_action, mask), mask_q_filter, axis=0) -
+                                    tf.boolean_mask(tf.boolean_mask(self.actions_ph, mask), mask_q_filter, axis=0)
+                                )
+                            )
+                            policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi -
+                                                            qf1_pi +
+                                                            # tf.reduce_mean(tf.square(self.main.pi_tf / self.max_u)) +
+                                                            self.bc_coef * self.cloning_loss)
+                        else:
+                            self.cloning_loss = tf.reduce_sum(
+                                tf.square(
+                                    tf.boolean_mask(self.deterministic_action, mask) -
+                                    tf.boolean_mask(self.actions_ph, mask))
+                            )
+                            policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi +
+                                                            self.bc_coef * self.cloning_loss)
+                        # policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
+                    else:
+                        policy_kl_loss = tf.reduce_mean(self.ent_coef * logp_pi - qf1_pi)
 
                     # NOTE: in the original implementation, they have an additional
                     # regularization loss for the gaussian parameters
@@ -322,7 +428,18 @@ class SAC(OffPolicyRLModel):
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
         # tung: Sample from replay buffer
-        batch = self.replay_buffer.sample(self.batch_size)
+        if self.use_bc:
+            assert self.demo_batchsize < self.batch_size, \
+                print('[AIM-NOTIFY] Batch size of demonstration buffer larger than batch size of replay buffer.')
+            batch_1 = self.replay_buffer.sample(self.batch_size - self.demo_batchsize)  # Sample from replay buffer
+            batch_2 = self.demo_buffer.sample(self.demo_batchsize)    # Sample from demo buffer
+            batch = ()
+            for i in range(len(batch_1)):
+                batch += (np.concatenate((batch_1[i], batch_2[i]), axis=0), )
+            del batch_1, batch_2
+        else:
+            batch = self.replay_buffer.sample(self.batch_size)
+
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
         feed_dict = {
@@ -381,6 +498,14 @@ class SAC(OffPolicyRLModel):
             n_updates = 0
             infos_values = []
 
+            # Variables used to log into tensorboard
+            episode_idx = 0
+            train_success_rate = 0.0
+            test_success_rate = 0.0
+            env_test = gym.make(self.env.spec.id)
+            env_test = gym.wrappers.FlattenDictWrapper(env_test, ['observation', 'desired_goal'])
+            n_eps_compute_reward = 100
+
             for step in range(total_timesteps):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
@@ -421,9 +546,23 @@ class SAC(OffPolicyRLModel):
                     ep_done = np.array([done]).reshape((1, -1))
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
                                                                       ep_done, writer, self.num_timesteps)
+                episode_rewards[-1] += reward
 
-                if step % self.train_freq == 0:
+                if done:
+                    self.replay_buffer.add(obs_t=obs['observation'],
+                                           action=-1,
+                                           desired_goal=-1,
+                                           achieved_goal=obs['achieved_goal'],
+                                           done=-1,
+                                           info=-1)
+
                     mb_infos_vals = []
+
+                    ep_info = self.replay_buffer.get_last_episodes(n_eps_compute_reward, 'info_is_success')
+                    if ep_info is not None:
+                        train_success_rate = compute_success_rate_from_list(ep_info)
+                    my_tensorboard_logger("Train_success_rate", train_success_rate, writer, self.num_timesteps)
+
                     # Update policy, critics and target networks
                     for grad_step in range(self.gradient_steps):
                         if self.replay_buffer.current_n_episodes * self.replay_buffer.horizon < self.batch_size or \
@@ -435,25 +574,19 @@ class SAC(OffPolicyRLModel):
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
                         mb_infos_vals.append(self._train_step(step, writer, current_lr))
+
+                    # Update target network
+                    if episode_idx % self.target_update_interval == 0:
                         # Update target network
-                        if (step + grad_step) % self.target_update_interval == 0:
-                            # Update target network
-                            self.sess.run(self.target_update_op)
+                        self.sess.run(self.target_update_op)
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
-                episode_rewards[-1] += reward
-                if done:
-                    self.replay_buffer.add(obs_t=obs['observation'],
-                                           action=-1,
-                                           desired_goal=-1,
-                                           achieved_goal=obs['achieved_goal'],
-                                           done=-1,
-                                           info=-1)
                     if not isinstance(self.env, VecEnv):
                         obs = self.env.reset()
                     episode_rewards.append(0.0)
+                    episode_idx += 1
 
                 if len(episode_rewards[-101:-1]) == 0:
                     mean_reward = -np.inf
@@ -478,17 +611,13 @@ class SAC(OffPolicyRLModel):
                         for (name, val) in zip(self.infos_names, infos_values):
                             logger.logkv(name, val)
                     logger.logkv("total timesteps", self.num_timesteps)
-                    if self.replay_buffer.current_n_episodes > 50:
-                        logger.logkv("Train success rate",
-                                     compute_success_rate_from_list(self.replay_buffer._storage['info_is_success']
-                                     [self.replay_buffer._next_episode_idx - 50:self.replay_buffer._next_episode_idx]))
+                    logger.logkv("Train success rate", train_success_rate)
                     # tung: modify interval for test
-                    if len(episode_rewards) % 10 == 0:
-                        env_test = gym.make(self.env.spec.id)
-                        env_test = gym.wrappers.FlattenDictWrapper(env_test, ['observation', 'desired_goal'])
+                    if len(episode_rewards) % n_eps_compute_reward == 0:
+
                         obs_test = env_test.reset()
                         infos_test, info_ep_test = [], []
-                        for _ in range(10):
+                        for _ in range(n_eps_compute_reward):
                             while True:
                                 action_test, _ = model.predict(obs_test)
                                 obs_test, rewards_test, done_test, info_test = env_test.step(action_test)
@@ -497,9 +626,9 @@ class SAC(OffPolicyRLModel):
                                     infos_test.append(info_ep_test)
                                     info_ep_test = []
                                     break
-
-                        logger.logkv("TEST SUCCESS RATE", compute_success_rate(infos_test))
-
+                        test_success_rate = compute_success_rate(infos_test)
+                        my_tensorboard_logger("Test_success_rate", test_success_rate, writer, self.num_timesteps)
+                        logger.logkv("TEST SUCCESS RATE", test_success_rate)
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []
@@ -591,7 +720,7 @@ from policies import FeedForwardPolicy
 class CustomSACPolicy(FeedForwardPolicy):
     def __init__(self, *args, **kwargs):
         super(CustomSACPolicy, self).__init__(*args, **kwargs,
-                                              layers=[400, 300],
+                                              layers=[256, 256, 256],
                                               layer_norm=False,
                                               feature_extraction="mlp")
 
@@ -602,32 +731,44 @@ if __name__ == '__main__':
 
     from stable_baselines.common.vec_env import DummyVecEnv
     from policies import MlpPolicy
-
     env = gym.make('FetchPickAndPlace-v1')
+    # env = gym.make('FetchReach-v1')
     env = gym.wrappers.FlattenDictWrapper(env, ['observation', 'desired_goal'])
+    env.observation_space.high = 200.0
+    env.observation_space.low = -200.0
 
     # env = DummyVecEnv([lambda: env])
-    save_dir = os.path.join('logs', 'sac_her_' + env.spec.id.split('-')[0])
+    save_dir = os.path.join('logs', 'sac_her_entAuto_delay_update_target' + env.spec.id.split('-')[0])
     save_filename = os.path.join(save_dir, 'sac_' + env.spec.id.split('-')[0])
 
     model = SAC(CustomSACPolicy, env, verbose=1,
+                learning_starts=100,
+                buffer_size=int(100000), #1e6
                 tensorboard_log=save_dir,
-                learning_rate=1e-3,
+                learning_rate=1e-4,
                 batch_size=256,
-                tau=0.005,
-                target_entropy=0.1,
-                ent_coef=0.1)
+                tau=0.05,
+                target_entropy='auto',
+                ent_coef='auto',
+                gradient_steps=50,
+                use_bc=True,
+                demo_batchsize=128,
+                demo_file='../her/data_generation/demonstration_FetchPickAndPlace.npz',
+                load_from_pickle=True,
+                use_q_filter=False,
+                pickle_file='demonstration_buffer.pkl'
+                )
 
-    model.learn(total_timesteps=50000, log_interval=2)
+    model.learn(total_timesteps=100000, log_interval=2)
     model.save(save_filename)
 
-    del model  # remove to demonstrate saving and loading
-    model = SAC.load(save_filename, env)
-
-    obs = env.reset()
-    while True:
-        action, _states = model.predict(obs)
-        obs, rewards, dones, info = env.step(action)
-        env.render()
-        if dones:
-            obs = env.reset()
+    # del model  # remove to demonstrate saving and loading
+    # model = SAC.load(save_filename, env)
+    #
+    # obs = env.reset()
+    # while True:
+    #     action, _states = model.predict(obs)
+    #     obs, rewards, dones, info = env.step(action)
+    #     env.render()
+    #     if dones:
+    #         obs = env.reset()
