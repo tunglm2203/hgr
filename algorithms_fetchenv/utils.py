@@ -210,7 +210,7 @@ def compute_success_rate_from_list(infos):
     return success_rate / n_demos
 
 
-def success_rate_logger(tag="Train_success_rate", value=None, writer=None, steps=0):
+def my_tensorboard_logger(tag="Train_success_rate", value=None, writer=None, steps=0):
     with tf.variable_scope("environment_info", reuse=True):
         # tung: This module only support 1 environment
         if value is not None:
