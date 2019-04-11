@@ -80,7 +80,8 @@ def train(policy, rollout_worker, evaluator,
         if rank == 0:
             logger.dump_tabular()
 
-        tensorboard_log(tensorboard, log_dict, epoch)
+        # tensorboard_log(tensorboard, log_dict, epoch)
+        tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
 
         # save the policy if it's better than the previous ones
         success_rate = mpi_average(evaluator.current_success_rate())
@@ -156,7 +157,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     rollout_params = {
         'exploit': False,
         'use_target_net': False,
-        'use_demo_states': True,
+        # 'use_demo_states': True,
         'compute_Q': False,
         'T': params['T'],
         #'render': 1,
@@ -190,14 +191,14 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
 
 @click.command()
 @click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_use_Qfilter_200_epochs_10_cpus', help='Path to save logs. If not specified, creates a folder in /tmp/')
+@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_no_Qfilter_200_epochs_FetchPickAndPlace')
 @click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
-@click.option('--num_cpu', type=int, default=10, help='the number of CPU cores to use (using MPI)')
-@click.option('--seed', type=int, default=0, help='the random seed used to seed both the environment and the training code')
+@click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
+@click.option('--seed', type=int, default=0, help='random seed used for both the environment and the training code')
 @click.option('--policy_save_interval', type=int, default=10, help='the interval with which policy pickles are saved. If set to 0, only the best and latest policy will be pickled.')
 @click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default='../data_fetch_random_100.npz', help='demo data file path')
+@click.option('--demo_file', type=str, default='../data_generation/demonstration_FetchPickAndPlace.npz', help='demo data file path')
 def main(**kwargs):
     launch(**kwargs)
 
