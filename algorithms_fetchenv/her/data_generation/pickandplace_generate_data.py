@@ -2,18 +2,18 @@ import gym
 import time
 import random
 import numpy as np
-import rospy
-import roslaunch
-
-from random import randint
-from std_srvs.srv import Empty
-from sensor_msgs.msg import JointState
-from geometry_msgs.msg import PoseStamped
-from geometry_msgs.msg import Pose
-from std_msgs.msg import Float64
-from controller_manager_msgs.srv import SwitchController
-from gym.utils import seeding
-from tqdm import tqdm
+# import rospy
+# import roslaunch
+#
+# from random import randint
+# from std_srvs.srv import Empty
+# from sensor_msgs.msg import JointState
+# from geometry_msgs.msg import PoseStamped
+# from geometry_msgs.msg import Pose
+# from std_msgs.msg import Float64
+# from controller_manager_msgs.srv import SwitchController
+# from gym.utils import seeding
+# from tqdm import tqdm
 
 
 """Data generation for the case of a single block with Fetch Arm pick and place"""
