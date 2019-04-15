@@ -68,6 +68,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
     episodeObs = []
     episodeRews = []
     episodeInfo = []
+    episodeDone = []
 
     object_oriented_goal = object_rel_pos.copy()
     object_oriented_goal[2] += 0.03
@@ -106,6 +107,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
+        episodeDone.append(done)
 
         objectPos = obsDataNew['observation'][3:6]
         object_rel_pos = obsDataNew['observation'][6:9]
@@ -131,6 +133,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
+        episodeDone.append(done)
 
         objectPos = obsDataNew['observation'][3:6]
         object_rel_pos = obsDataNew['observation'][6:9]
@@ -156,6 +159,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
+        episodeDone.append(done)
 
         objectPos = obsDataNew['observation'][3:6]
 
@@ -171,6 +175,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
         episodeAcs.append(action)
         episodeRews.append(reward)
         episodeInfo.append(info)
+        episodeDone.append(done)
 
         if use_with_ddpg_her:
             episodeObs.append(obsDataNew)
@@ -188,7 +193,8 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
 
     print("Total timesteps taken ", timeStep)
 
-    return np.array(episodeObs), np.array(episodeAcs), np.array(episodeRews), sum(episodeRews), episodeInfo, timeStep
+    return np.array(episodeObs), np.array(episodeAcs), np.array(episodeRews), sum(episodeRews), \
+           episodeInfo, timeStep, np.array(episodeDone)
 
 
 def main():
@@ -205,26 +211,29 @@ def main():
     observations = []
     rewards = []
     infos = []
+    dones = []
 
     while len(actions) < numItr:
         obs = env.reset()
         # env.render()
         print("Reset!")
         print("ITERATION NUMBER ", len(actions))
-        ob, ac, rew, ret, info, time_step = goToGoal(env, obs, use_with_ddpg_her)
+        ob, ac, rew, ret, info, time_step, do = goToGoal(env, obs, use_with_ddpg_her)
         if time_step == env._max_episode_steps:
             observations.append(ob)
             actions.append(ac)
             rewards.append(rew)
             ep_returns.append(ret)
             infos.append(info)
+            dones.append(do)
 
     fileName = "demonstration_FetchPickAndPlace"
 
     success_rate = compute_success_rate(infos)
 
     print('\nSuccess rate on demonstration: {}'.format(success_rate))
-    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations, rews=rewards, acs=actions, info=infos)
+    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations,
+                        rews=rewards, acs=actions, info=infos, done=dones)
 
 
 if __name__ == "__main__":
