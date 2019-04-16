@@ -46,6 +46,7 @@ def train(policy, rollout_worker, evaluator,
     if policy.bc_loss == 1:
         print('Initializing demonstration buffer...')
         policy.initDemoBuffer(demo_file)  #initializwe demo buffer
+        # policy.initDemoBuffer(demo_file, load_from_pickle=True, pickle_file='demo_pickandplace.pkl')
 
     for epoch in tqdm(range(n_epochs)):
         # train
@@ -190,16 +191,17 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
 
 
 @click.command()
-@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_no_Qfilter_200_epochs_FetchPickAndPlace')
+@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment')
+@click.option('--logdir', type=str, default='../../logs/ddpg_her_use_bc_no_qfil_2')
 @click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
 @click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
 @click.option('--seed', type=int, default=0, help='random seed used for both the environment and the training code')
 @click.option('--policy_save_interval', type=int, default=10, help='the interval with which policy pickles are saved. If set to 0, only the best and latest policy will be pickled.')
 @click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default='../data_generation/demonstration_FetchPickAndPlace.npz', help='demo data file path')
+@click.option('--demo_file', type=str, default='../data_generation/demonstration_FetchPickAndPlace_100_best.npz', help='demo data file path')
 def main(**kwargs):
+    kwargs['logdir'] = kwargs['logdir'] + '_' + kwargs['env'].split('-')[0]
     launch(**kwargs)
 
 
