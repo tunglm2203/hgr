@@ -363,7 +363,7 @@ class TD3(object):
         logger.info("Creating a TD3 agent with action space %d x %s..." % (self.dimu, self.max_u))
 
         # Action limit for clamping: critically, assumes all dimensions share the same bound!
-        act_limit = 1.0 # tung: act_limit = env.action_space.high[0] (Modify to generalize)
+        act_limit = 1.0  # tung: act_limit = env.action_space.high[0] (Modify to generalize)
 
         self.sess = tf.get_default_session()
         if self.sess is None:
@@ -401,6 +401,7 @@ class TD3(object):
             target_batch_tf = batch_tf.copy()
             target_batch_tf['o'] = batch_tf['o_2']
             target_batch_tf['g'] = batch_tf['g_2']
+            # target_batch_tf['u'] = batch_tf['u']
 
             self.target = self.create_actor_critic(target_batch_tf, net_type='target', **self.__dict__)
             vs.reuse_variables()
@@ -410,7 +411,7 @@ class TD3(object):
             # Target policy smoothing, by adding clipped noise to target actions
             epsilon = tf.random_normal(tf.shape(self.target.pi_tf), stddev=self.target_noise)
             epsilon = tf.clip_by_value(epsilon, -self.noise_clip, self.noise_clip)
-            a2 = self.target.pi_tf + epsilon
+            a2 = tf.add(self.target.pi_tf, epsilon, name='action_add_noise')
             a2 = tf.clip_by_value(a2, -act_limit, act_limit)
 
             # Prepare placeholder
@@ -432,9 +433,9 @@ class TD3(object):
         )
 
         # TD3 loss functions
-        q1_loss = tf.reduce_mean((self.main.q1_tf - backup) ** 2)
-        q2_loss = tf.reduce_mean((self.main.q2_tf - backup) ** 2)
-        self.Q_loss_tf = q1_loss + q2_loss
+        self.q1_loss = tf.reduce_mean((self.main.q1_tf - backup) ** 2)
+        self.q2_loss = tf.reduce_mean((self.main.q2_tf - backup) ** 2)
+        self.Q_loss_tf = self.q1_loss + self.q2_loss
 
         if self.bc_loss == 1 and self.q_filter == 1:
             # where is the demonstrator action better than actor action according to the critic?
@@ -463,7 +464,6 @@ class TD3(object):
             self.cloning_loss_tf = tf.reduce_sum((self.main.pi_tf - batch_tf['u']) ** 2)
 
         # Separate train ops for pi, q
-
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
         Q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/q1') + self._vars('main/q2'))
 
@@ -494,7 +494,8 @@ class TD3(object):
         self._init_target_net()
 
         # Add ops to save and restore all the variables.
-        self.saver = tf.train.Saver()
+        train_writer = tf.summary.FileWriter('./model_test')
+        train_writer.add_graph(self.sess.graph)
 
     def logs(self, prefix=''):
         logs = []
