@@ -32,10 +32,10 @@ DEFAULT_PARAMS = {
     'polyak': 0.95,  # polyak averaging coefficient
     'action_l2': 1.0,  # quadratic penalty on actions (before rescaling by max_u)
     'clip_obs': 200.,
-    'scope': 'ddpg',  # can be tweaked for testing
+    'scope': 'td3',  # can be tweaked for testing
     'relative_goals': False,
     # training
-    'n_cycles': 50,  # per epoch
+    'n_cycles': 20,  # per epoch
     'rollout_batch_size': 2,  # per mpi thread
     'n_batches': 40,  # training batches per cycle
     'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
@@ -50,7 +50,7 @@ DEFAULT_PARAMS = {
     # normalization
     'norm_eps': 0.01,  # epsilon used for observation normalization
     'norm_clip': 5,  # normalized observations are cropped to this values
-    'bc_loss': 0, # whether or not to use the behavior cloning loss as an auxilliary loss
+    'bc_loss': 1, # whether or not to use the behavior cloning loss as an auxilliary loss
     'q_filter': 0, # whether or not a Q value filter should be used on the Actor outputs
     'num_demo': 100 # number of expert demo episodes
 }
