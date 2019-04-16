@@ -45,7 +45,8 @@ def train(policy, rollout_worker, evaluator,
 
     if policy.bc_loss == 1:
         print('Initializing demonstration buffer...')
-        policy.initDemoBuffer(demo_file)  #initializwe demo buffer
+        # policy.initDemoBuffer(demo_file)  #initializwe demo buffer
+        policy.initDemoBuffer(demo_file, load_from_pickle=True, pickle_file='demo_pickandplace.pkl')
 
     for epoch in tqdm(range(n_epochs)):
         # train
@@ -53,56 +54,61 @@ def train(policy, rollout_worker, evaluator,
         for _ in range(n_cycles):
             episode = rollout_worker.generate_rollouts()
             policy.store_episode(episode)
+
+            total_q1_loss, total_pi_loss = 0.0, 0.0
             for _ in range(n_batches):
-                policy.train()
+                q_loss, pi_loss = policy.train()
+                total_q1_loss += q_loss
+                total_pi_loss += total_pi_loss
             policy.update_target_net()
 
-        # test
-        logger.info("Testing")
-        evaluator.clear_history()
-        for _ in range(n_test_rollouts):
-            evaluator.generate_rollouts()
+            # test
+            logger.info("Testing")
+            evaluator.clear_history()
+            for _ in range(n_test_rollouts):
+                evaluator.generate_rollouts()
 
-        # record logs
-        logger.record_tabular('epoch', epoch)
+            # record logs
+            logger.record_tabular('epoch', epoch)
 
-        log_dict = {}
-        for key, val in evaluator.logs('test'):
-            logger.record_tabular(key, mpi_average(val))
-            log_dict[key] = mpi_average(val)
-        for key, val in rollout_worker.logs('train'):
-            logger.record_tabular(key, mpi_average(val))
-            log_dict[key] = mpi_average(val)
-        for key, val in policy.logs():
-            logger.record_tabular(key, mpi_average(val))
-            log_dict[key] = mpi_average(val)
+            log_dict = {}
+            for key, val in evaluator.logs('test'):
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            for key, val in rollout_worker.logs('train'):
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            for key, val in policy.logs():
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            log_dict['q1_loss'] = total_q1_loss / n_batches
+            log_dict['pi_loss'] = total_pi_loss / n_batches
+            if rank == 0:
+                logger.dump_tabular()
 
-        if rank == 0:
-            logger.dump_tabular()
+            # tensorboard_log(tensorboard, log_dict, epoch)
+            tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
 
-        # tensorboard_log(tensorboard, log_dict, epoch)
-        tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
+            # save the policy if it's better than the previous ones
+            success_rate = mpi_average(evaluator.current_success_rate())
+            if rank == 0 and success_rate >= best_success_rate and save_policies:
+                best_success_rate = success_rate
+                best_success_epoch = epoch
+                logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
+                evaluator.save_policy(best_policy_path)
+                evaluator.save_policy(latest_policy_path)
+            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_policies:
+                policy_path = periodic_policy_path.format(epoch)
+                logger.info('Saving periodic policy to {} ...'.format(policy_path))
+                evaluator.save_policy(policy_path)
 
-        # save the policy if it's better than the previous ones
-        success_rate = mpi_average(evaluator.current_success_rate())
-        if rank == 0 and success_rate >= best_success_rate and save_policies:
-            best_success_rate = success_rate
-            best_success_epoch = epoch
-            logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
-            evaluator.save_policy(best_policy_path)
-            evaluator.save_policy(latest_policy_path)
-        if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_policies:
-            policy_path = periodic_policy_path.format(epoch)
-            logger.info('Saving periodic policy to {} ...'.format(policy_path))
-            evaluator.save_policy(policy_path)
-
-        # make sure that different threads have different seeds
-        logger.info("Best success rate so far ", best_success_rate, " In epoch number ", best_success_epoch)
-        local_uniform = np.random.uniform(size=(1,))
-        root_uniform = local_uniform.copy()
-        MPI.COMM_WORLD.Bcast(root_uniform, root=0)
-        if rank != 0:
-            assert local_uniform[0] != root_uniform[0]
+            # make sure that different threads have different seeds
+            logger.info("Best success rate so far ", best_success_rate, " In epoch number ", best_success_epoch)
+            local_uniform = np.random.uniform(size=(1,))
+            root_uniform = local_uniform.copy()
+            MPI.COMM_WORLD.Bcast(root_uniform, root=0)
+            if rank != 0:
+                assert local_uniform[0] != root_uniform[0]
 
 
 def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_interval,
@@ -191,7 +197,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
 
 @click.command()
 @click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_no_Qfilter_200_epochs_FetchPickAndPlace')
+@click.option('--logdir', type=str, default='../../logs/ddpg_her_use_BC_no_qfil_2')
 @click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
 @click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
 @click.option('--seed', type=int, default=0, help='random seed used for both the environment and the training code')
@@ -200,6 +206,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
 @click.option('--demo_file', type=str, default='../data_generation/demonstration_FetchPickAndPlace.npz', help='demo data file path')
 def main(**kwargs):
+    kwargs['logdir'] = kwargs['logdir'] + '_' + kwargs['env'].split('-')[0]
     launch(**kwargs)
 
 
