@@ -20,6 +20,16 @@ DEFAULT_ENV_PARAMS = {
 
 
 DEFAULT_PARAMS = {
+    # tung: Scope for training (log path, n epochs, etc.)
+    'env_name': 'FetchPickAndPlace-v1',
+    'logdir': '../../logs/ddpg_her_use_bc_no_qfil_1_test_adsadasd',
+    'n_epochs': 200,
+    'num_cpu': 1,
+    'seed': 0,
+    'policy_save_interval': 10,
+    'clip_return': 1,
+    'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
+
     # env
     'max_u': 1.,  # max absolute value of actions on different coordinates
     # ddpg

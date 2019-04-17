@@ -39,6 +39,8 @@ def train(policy, rollout_worker, evaluator,
     best_policy_path = os.path.join(logger.get_dir(), 'policy_best.pkl')
     periodic_policy_path = os.path.join(logger.get_dir(), 'policy_{}.pkl')
 
+    save_dir = logger.get_dir()
+
     logger.info("Training...")
     best_success_rate = -1
     best_success_epoch = 0
@@ -52,6 +54,7 @@ def train(policy, rollout_worker, evaluator,
         # train
         rollout_worker.clear_history()
         for _ in range(n_cycles):
+            logger.info("[INFO] %s" % save_dir)
             episode = rollout_worker.generate_rollouts()
             policy.store_episode(episode)
 
@@ -59,7 +62,7 @@ def train(policy, rollout_worker, evaluator,
             for _ in range(n_batches):
                 q_loss, pi_loss = policy.train()
                 total_q1_loss += q_loss
-                total_pi_loss += total_pi_loss
+                total_pi_loss += pi_loss
             policy.update_target_net()
 
             # test
@@ -111,8 +114,19 @@ def train(policy, rollout_worker, evaluator,
                 assert local_uniform[0] != root_uniform[0]
 
 
-def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_interval,
-           clip_return, demo_file=None, override_params={}, save_policies=True):
+def launch(save_policies=True):
+
+    # Prepare params.
+    params = config.DEFAULT_PARAMS
+
+    logdir = params['logdir'] + '_' + params['env_name'].split('-')[0]
+    env = params['env_name']
+    n_epochs = params['n_epochs']
+    num_cpu = params['num_cpu']
+    seed = params['seed']
+    policy_save_interval = params['policy_save_interval']
+    clip_return = params['clip_return']
+    demo_file = params['demo_file']
 
     tensorboard = SummaryWriter(logdir)
     # Fork for multi-CPU MPI implementation.
@@ -144,13 +158,11 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     set_global_seeds(rank_seed)
     resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
 
-    # Prepare params.
-    params = config.DEFAULT_PARAMS
-    params['env_name'] = env
-    params['replay_strategy'] = replay_strategy
+    # params['env_name'] = env
+    # params['replay_strategy'] = replay_strategy
     if env in config.DEFAULT_ENV_PARAMS:
         params.update(config.DEFAULT_ENV_PARAMS[env])  # merge env-specific parameters in
-    params.update(**override_params)  # makes it possible to override any parameter
+    # params.update(**override_params)  # makes it possible to override any parameter
 
     with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
         json.dump(params, f)
@@ -188,26 +200,15 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     evaluator = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **eval_params)
     evaluator.seed(rank_seed)
 
-    train(logdir=logdir, policy=policy, rollout_worker=rollout_worker,
+    train(policy=policy, rollout_worker=rollout_worker,
           evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
           n_cycles=params['n_cycles'], n_batches=params['n_batches'],
           policy_save_interval=policy_save_interval, save_policies=save_policies, demo_file=demo_file,
           tensorboard=tensorboard)
 
 
-@click.command()
-@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../logs/ddpg_her_use_BC_no_qfil_2')
-@click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
-@click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
-@click.option('--seed', type=int, default=0, help='random seed used for both the environment and the training code')
-@click.option('--policy_save_interval', type=int, default=10, help='the interval with which policy pickles are saved. If set to 0, only the best and latest policy will be pickled.')
-@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
-@click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default='../data_generation/demonstration_FetchPickAndPlace.npz', help='demo data file path')
-def main(**kwargs):
-    kwargs['logdir'] = kwargs['logdir'] + '_' + kwargs['env'].split('-')[0]
-    launch(**kwargs)
+def main():
+    launch()
 
 
 if __name__ == '__main__':
