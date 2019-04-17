@@ -20,6 +20,18 @@ DEFAULT_ENV_PARAMS = {
 
 
 DEFAULT_PARAMS = {
+    # tung: Scope for training (log path, n epochs, etc.)
+    'env_name': 'FetchPickAndPlace-v1',
+    'logdir': '../../logs/td3_her_use_bc_no_qfil_50_cycles_20_batch_1_targnoise_0.1_clipnoise_0.2',
+    'n_epochs': 200,
+    'num_cpu': 1,
+    'seed': 0,
+    'policy_save_interval': 10,
+    'clip_return': 1,
+    'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
+    'target_noise': 0.1,    # Noise add to target's action to compute target
+    'noise_clip': 0.2,      # Clipping noise for target's action
+
     # env
     'max_u': 1.,  # max absolute value of actions on different coordinates
     # ddpg
@@ -35,9 +47,9 @@ DEFAULT_PARAMS = {
     'scope': 'td3',  # can be tweaked for testing
     'relative_goals': False,
     # training
-    'n_cycles': 20,  # per epoch
+    'n_cycles': 50,  # per epoch
     'rollout_batch_size': 2,  # per mpi thread
-    'n_batches': 40,  # training batches per cycle
+    'n_batches': 20,  # training batches per cycle
     'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
     'n_test_rollouts': 10,  # number of test rollouts per epoch, each consists of rollout_batch_size rollouts
     'test_with_polyak': False,  # run test episodes with the target network
@@ -73,7 +85,7 @@ def cached_make_env(make_env):
 
 def prepare_params(kwargs):
     # DDPG params
-    ddpg_params = dict()
+    td3_params = dict()
 
     env_name = kwargs['env_name']
 
@@ -95,11 +107,12 @@ def prepare_params(kwargs):
                  'polyak',
                  'batch_size', 'Q_lr', 'pi_lr',
                  'norm_eps', 'norm_clip', 'max_u',
-                 'action_l2', 'clip_obs', 'scope', 'relative_goals']:
-        ddpg_params[name] = kwargs[name]
+                 'action_l2', 'clip_obs', 'scope', 'relative_goals',
+                 'target_noise', 'noise_clip']:
+        td3_params[name] = kwargs[name]
         kwargs['_' + name] = kwargs[name]
         del kwargs[name]
-    kwargs['ddpg_params'] = ddpg_params
+    kwargs['td3_params'] = td3_params
 
     return kwargs
 
@@ -134,19 +147,19 @@ def simple_goal_subtract(a, b):
     return a - b
 
 
-def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
+def configure_td3(dims, params, reuse=False, use_mpi=True, clip_return=True):
     sample_her_transitions = configure_her(params)
     # Extract relevant parameters.
     gamma = params['gamma']
     rollout_batch_size = params['rollout_batch_size']
-    ddpg_params = params['ddpg_params']
+    td3_params = params['td3_params']
 
     input_dims = dims.copy()
 
     # DDPG agent
     env = cached_make_env(params['make_env'])
     env.reset()
-    ddpg_params.update({'input_dims': input_dims,  # agent takes an input observations
+    td3_params.update({'input_dims': input_dims,  # agent takes an input observations
                         'T': params['T'],
                         'clip_pos_returns': True,  # clip positive returns
                         'clip_return': (1. / (1. - gamma)) if clip_return else np.inf,  # max abs of return
@@ -158,10 +171,10 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
                         'q_filter': params['q_filter'],
                         'num_demo': params['num_demo'],
                         })
-    ddpg_params['info'] = {
+    td3_params['info'] = {
         'env_name': params['env_name'],
     }
-    policy = TD3(reuse=reuse, **ddpg_params, use_mpi=use_mpi)
+    policy = TD3(reuse=reuse, **td3_params, use_mpi=use_mpi)
     return policy
 
 

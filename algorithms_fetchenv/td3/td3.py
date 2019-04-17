@@ -57,12 +57,6 @@ class TD3(object):
             reuse (boolean): whether or not the networks should be reused
         """
 
-        # Tung: Add for TD3, need to merge into function interface
-        target_noise = 0.2
-        noise_clip = 0.5
-        self.target_noise = target_noise
-        self.noise_clip = noise_clip
-
         if self.clip_return is None:
             self.clip_return = np.inf
 
@@ -286,22 +280,9 @@ class TD3(object):
         return self.buffer.get_current_size()
 
     def _sync_optimizers(self):
-        self.Q_adam.sync()
+        self.Q1_adam.sync()
+        self.Q2_adam.sync()
         self.pi_adam.sync()
-
-    def _grads(self):
-        # Avoid feed_dict here for performance!
-        critic_loss , actor_loss, Q_grad, pi_grad = self.sess.run([
-            self.Q_loss_tf,
-            self.pi_loss_tf,
-            self.Q_grad_tf,
-            self.pi_grad_tf
-        ])
-        return critic_loss, actor_loss, Q_grad, pi_grad
-
-    def _update(self, Q_grad, pi_grad):
-        self.Q_adam.update(Q_grad, self.Q_lr)
-        self.pi_adam.update(pi_grad, self.pi_lr)
 
     def sample_batch(self):
 
@@ -337,9 +318,26 @@ class TD3(object):
     def train(self, stage=True):
         if stage:
             self.stage_batch()
-        critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
-        self._update(Q_grad, pi_grad)
-        return critic_loss, actor_loss
+        critic_1_loss, critic_2_loss, actor_loss, Q1_grad, Q2_grad, pi_grad = self._grads()
+        self._update(Q1_grad, Q2_grad, pi_grad)
+        return critic_1_loss, critic_2_loss, actor_loss
+
+    def _grads(self):
+        # Avoid feed_dict here for performance!
+        critic_1_loss, critic_2_loss, actor_loss, Q1_grad, Q2_grad, pi_grad = self.sess.run([
+            self.q1_loss,
+            self.q2_loss,
+            self.pi_loss_tf,
+            self.Q1_grad_tf,
+            self.Q2_grad_tf,
+            self.pi_grad_tf
+        ])
+        return critic_1_loss, critic_2_loss, actor_loss, Q1_grad, Q2_grad, pi_grad
+
+    def _update(self, Q1_grad, Q2_grad, pi_grad):
+        self.Q1_adam.update(Q1_grad, self.Q_lr)
+        self.Q2_adam.update(Q2_grad, self.Q_lr)
+        self.pi_adam.update(pi_grad, self.pi_lr)
 
     def _init_target_net(self):
         self.sess.run(self.init_target_net_op)
@@ -435,7 +433,7 @@ class TD3(object):
         # TD3 loss functions
         self.q1_loss = tf.reduce_mean((self.main.q1_tf - backup) ** 2)
         self.q2_loss = tf.reduce_mean((self.main.q2_tf - backup) ** 2)
-        self.Q_loss_tf = self.q1_loss + self.q2_loss
+        # self.Q_loss_tf = self.q1_loss + self.q2_loss
 
         if self.bc_loss == 1 and self.q_filter == 1:
             # where is the demonstrator action better than actor action according to the critic?
@@ -465,18 +463,23 @@ class TD3(object):
 
         # Separate train ops for pi, q
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
-        Q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/q1') + self._vars('main/q2'))
+        Q1_grads_tf = tf.gradients(self.q1_loss, self._vars('main/q1'))
+        Q2_grads_tf = tf.gradients(self.q2_loss, self._vars('main/q2'))
 
-        assert len(self._vars('main/q1') + self._vars('main/q2')) == len(Q_grads_tf)
+        assert len(self._vars('main/q1')) == len(Q1_grads_tf)
+        assert len(self._vars('main/q1')) == len(Q2_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
 
-        self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/q1') + self._vars('main/q2'))
-        self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
-        self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/q1')+self._vars('main/q2'))
+        # self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/q1') + self._vars('main/q2'))
+        # self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
+
+        self.Q1_grad_tf = flatten_grads(grads=Q1_grads_tf, var_list=self._vars('main/q1'))
+        self.Q2_grad_tf = flatten_grads(grads=Q2_grads_tf, var_list=self._vars('main/q2'))
         self.pi_grad_tf = flatten_grads(grads=pi_grads_tf, var_list=self._vars('main/pi'))
 
         # optimizers
-        self.Q_adam = MpiAdam(self._vars('main/q1') + self._vars('main/q2'), scale_grad_by_procs=False)
+        self.Q1_adam = MpiAdam(self._vars('main/q1'), scale_grad_by_procs=False)
+        self.Q2_adam = MpiAdam(self._vars('main/q2'), scale_grad_by_procs=False)
         self.pi_adam = MpiAdam(self._vars('main/pi'), scale_grad_by_procs=False)
 
         # polyak averaging
