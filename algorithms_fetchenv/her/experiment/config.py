@@ -21,10 +21,11 @@ DEFAULT_ENV_PARAMS = {
 
 DEFAULT_PARAMS = {
     # tung: Scope for training (log path, n epochs, etc.)
+    'root_savedir': '../../logs',
     'env_name': 'FetchPickAndPlace-v1',
-    'logdir': '../../logs/ddpg_her_use_bc_no_qfil_1_test_adsadasd',
-    'n_epochs': 200,
-    'num_cpu': 1,
+    'logdir': 'use_bc_no_qfil_modify_act_noise',
+    'n_epochs': 80,
+    'num_cpu': 2,
     'seed': 0,
     'policy_save_interval': 10,
     'clip_return': 1,
@@ -42,7 +43,7 @@ DEFAULT_PARAMS = {
     'polyak': 0.95,  # polyak averaging coefficient
     'action_l2': 1.0,  # quadratic penalty on actions (before rescaling by max_u)
     'clip_obs': 200.,
-    'scope': 'ddpg',  # can be tweaked for testing
+    'scope': 'ddpg_her',  # can be tweaked for testing
     'relative_goals': False,
     # training
     'n_cycles': 50,  # per epoch
