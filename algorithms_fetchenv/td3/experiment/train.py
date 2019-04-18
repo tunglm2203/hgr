@@ -8,7 +8,7 @@ from baselines import logger
 from baselines.common import set_global_seeds
 from baselines.common.mpi_moments import mpi_moments
 import config
-from rollout import RolloutWorkerOriginal
+from rollout import RolloutWorker, RolloutWorkerOriginal
 from util import mpi_fork
 
 from subprocess import CalledProcessError
@@ -30,7 +30,7 @@ def mpi_average(value):
 
 def train(policy, rollout_worker, evaluator,
           n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          save_policies, demo_file, tensorboard):
+          save_policies, demo_file, tensorboard, **kwargs):
     rank = MPI.COMM_WORLD.Get_rank()
 
     latest_policy_path = os.path.join(logger.get_dir(), 'policy_latest.pkl')
@@ -99,12 +99,12 @@ def train(policy, rollout_worker, evaluator,
                 best_success_rate = success_rate
                 best_success_epoch = epoch
                 logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
-                # evaluator.save_policy(best_policy_path)
-                # evaluator.save_policy(latest_policy_path)
+                evaluator.save_policy(best_policy_path)
+                evaluator.save_policy(latest_policy_path)
             if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_policies:
                 policy_path = periodic_policy_path.format(epoch)
                 logger.info('Saving periodic policy to {} ...'.format(policy_path))
-                # evaluator.save_policy(policy_path)
+                evaluator.save_policy(policy_path)
 
             # make sure that different threads have different seeds
             logger.info("Best success rate so far ", best_success_rate, " In epoch number ", best_success_epoch)
