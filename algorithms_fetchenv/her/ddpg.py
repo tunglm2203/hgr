@@ -328,10 +328,24 @@ class DDPG(object):
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
     def train(self, stage=True):
+        batch = self.sample_batch()
         if stage:
-            self.stage_batch()
-        critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
-        self._update(Q_grad, pi_grad)
+            self.stage_batch(batch)
+
+        critic_loss, Q_grad = self.sess.run([
+            self.Q_loss_tf,
+            self.Q_grad_tf,
+        ])
+
+        if stage:
+            self.stage_batch(batch)
+        actor_loss, pi_grad = self.sess.run([
+            self.pi_loss_tf,
+            self.pi_grad_tf
+        ])
+
+        self.Q_adam.update(Q_grad, self.Q_lr)
+        self.pi_adam.update(pi_grad, self.pi_lr)
         return critic_loss, actor_loss
 
     def _init_target_net(self):
@@ -433,8 +447,6 @@ class DDPG(object):
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
         assert len(self._vars('main/Q')) == len(Q_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
-        self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/Q'))
-        self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
         self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/Q'))
         self.pi_grad_tf = flatten_grads(grads=pi_grads_tf, var_list=self._vars('main/pi'))
 
