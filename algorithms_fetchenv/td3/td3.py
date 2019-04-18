@@ -67,10 +67,10 @@ class TD3(object):
         self.dimg = self.input_dims['g']
         self.dimu = self.input_dims['u']
 
-        self.demo_batch_size = 128
-        self.lambda1 = 0.001
-        self.lambda2 = 0.0078
-        self.l2_reg_coeff = 0.005
+        # self.demo_batch_size = 128
+        self.lambda1 = self.prm_loss_weight
+        self.lambda2 = self.aux_loss_weight
+        # self.l2_reg_coeff = 0.005
 
         # Prepare staging area for feeding data to the model.
         stage_shapes = OrderedDict()
@@ -322,10 +322,10 @@ class TD3(object):
 
         if stage:
             self.stage_batch(batch)
-        actor_loss, pi_grad = self._pi_grads()
+        actor_loss, pi_grad, cloning_loss = self._pi_grads()
         self._q_update(Q_grad)
         self._pi_update(pi_grad)
-        return critic_1_loss, critic_2_loss, actor_loss
+        return critic_1_loss, critic_2_loss, actor_loss, cloning_loss
 
     def _q_grads(self):
         # Avoid feed_dict here for performance!
@@ -338,11 +338,12 @@ class TD3(object):
 
     def _pi_grads(self):
         # Avoid feed_dict here for performance!
-        actor_loss, pi_grad = self.sess.run([
+        cloning_loss, actor_loss, pi_grad = self.sess.run([
+            self.cloning_loss_tf,
             self.pi_loss_tf,
             self.pi_grad_tf
         ])
-        return actor_loss, pi_grad
+        return actor_loss, pi_grad, cloning_loss
 
     def _q_update(self, Q_grad):
         self.Q_adam.update(Q_grad, self.Q_lr)
@@ -370,9 +371,6 @@ class TD3(object):
 
     def _create_network(self, reuse=False):
         logger.info("Creating a TD3 agent with action space %d x %s..." % (self.dimu, self.max_u))
-
-        # Action limit for clamping: critically, assumes all dimensions share the same bound!
-        act_limit = 1.0  # tung: act_limit = env.action_space.high[0] (Modify to generalize)
 
         self.sess = tf.get_default_session()
         if self.sess is None:
@@ -421,9 +419,9 @@ class TD3(object):
                 vs.reuse_variables()
             # Target policy smoothing, by adding clipped noise to target actions
             epsilon = tf.random_normal(tf.shape(self.target.pi_tf), stddev=self.target_noise)
-            epsilon = tf.clip_by_value(epsilon, -self.noise_clip, self.noise_clip)
+            epsilon = tf.clip_by_value(epsilon, -self.target_noise_clip, self.target_noise_clip)
             a2 = tf.add(self.target.pi_tf, epsilon, name='action_add_noise')
-            a2 = tf.clip_by_value(a2, -act_limit, act_limit)
+            a2 = tf.clip_by_value(a2, -self.max_u, self.max_u)
 
             # Prepare placeholder
             target_batch_tf = batch_tf.copy()
@@ -461,8 +459,7 @@ class TD3(object):
             self.pi_loss_tf += self.lambda2 * self.cloning_loss_tf
 
         elif self.bc_loss == 1 and self.q_filter == 0:
-            self.cloning_loss_tf = tf.reduce_sum(
-                (tf.boolean_mask(self.main.pi_tf, mask) -
+            self.cloning_loss_tf = tf.reduce_sum((tf.boolean_mask(self.main.pi_tf, mask) -
                  tf.boolean_mask(batch_tf['u'], mask)) ** 2
             )
             self.pi_loss_tf = -self.lambda1 * tf.reduce_mean(self.main.q1_pi_tf)
@@ -472,14 +469,14 @@ class TD3(object):
         else:
             self.pi_loss_tf = -tf.reduce_mean(self.main.q1_pi_tf)
             self.pi_loss_tf += self.action_l2 * tf.reduce_mean((self.main.pi_tf / self.max_u) ** 2)
-            self.cloning_loss_tf = tf.reduce_sum((self.main.pi_tf - batch_tf['u']) ** 2)
+            self.cloning_loss_tf = tf.reduce_sum((tf.boolean_mask(self.main.pi_tf, mask) -
+                                                  tf.boolean_mask(batch_tf['u'], mask)) ** 2)
 
         # Separate train ops for pi, q
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
         Q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/q1') + self._vars('main/q2'))
 
         assert len(self._vars('main/q1')) + len(self._vars('main/q2')) == len(Q_grads_tf)
-        # assert len(self._vars('main/q2')) == len(Q2_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
 
         self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/q1') + self._vars('main/q2'))

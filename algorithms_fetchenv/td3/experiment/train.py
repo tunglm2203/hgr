@@ -50,69 +50,72 @@ def train(policy, rollout_worker, evaluator,
 
     for epoch in tqdm(range(n_epochs)):
         # train
-        rollout_worker.clear_history()
-        for _ in range(n_cycles):
-            logger.info("[INFO] %s" % save_dir)
-            episode = rollout_worker.generate_rollouts()
-            policy.store_episode(episode)
+        if epoch % n_cycles == 0:
+            rollout_worker.clear_history()
+        # for _ in range(n_cycles):
+        logger.info("[INFO] %s" % save_dir)
+        episode = rollout_worker.generate_rollouts()
+        policy.store_episode(episode)
 
-            total_q1_loss, total_q2_loss, total_pi_loss = 0.0, 0.0, 0.0
-            for _ in range(n_batches):
-                q1_loss, q2_loss, pi_loss = policy.train()
-                total_q1_loss += q1_loss
-                total_q2_loss += q2_loss
-                total_pi_loss += pi_loss
+        total_q1_loss, total_q2_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0, 0.0
+        for _ in range(n_batches):
+            q1_loss, q2_loss, pi_loss, cloning_loss = policy.train()
+            total_q1_loss += q1_loss
+            total_q2_loss += q2_loss
+            total_pi_loss += pi_loss
+            total_cloning_loss += cloning_loss
 
-            policy.update_target_net()
+        policy.update_target_net()
 
-            # test
-            logger.info("Testing")
-            evaluator.clear_history()
-            for _ in range(n_test_rollouts):
-                evaluator.generate_rollouts()
+        # test
+        logger.info("Testing")
+        evaluator.clear_history()
+        for _ in range(n_test_rollouts):
+            evaluator.generate_rollouts()
 
-            # record logs
-            logger.record_tabular('epoch', epoch)
+        # record logs
+        logger.record_tabular('epoch', epoch)
 
-            log_dict = {}
-            for key, val in evaluator.logs('test'):
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
-            for key, val in rollout_worker.logs('train'):
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
-            for key, val in policy.logs():
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
+        log_dict = {}
+        for key, val in evaluator.logs('test'):
+            logger.record_tabular(key, mpi_average(val))
+            log_dict[key] = mpi_average(val)
+        for key, val in rollout_worker.logs('train'):
+            logger.record_tabular(key, mpi_average(val))
+            log_dict[key] = mpi_average(val)
+        for key, val in policy.logs():
+            logger.record_tabular(key, mpi_average(val))
+            log_dict[key] = mpi_average(val)
 
-            log_dict['q1_loss'] = total_q1_loss/n_batches
-            log_dict['q2_loss'] = total_q2_loss/n_batches
-            log_dict['pi_loss'] = total_pi_loss/n_batches
-            if rank == 0:
-                logger.dump_tabular()
+        log_dict['q1_loss'] = total_q1_loss/n_batches
+        log_dict['q2_loss'] = total_q2_loss/n_batches
+        log_dict['pi_loss'] = total_pi_loss/n_batches
+        log_dict['cloning_loss'] = total_cloning_loss / n_batches
+        if rank == 0:
+            logger.dump_tabular()
 
-            tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
+        tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
 
-            # save the policy if it's better than the previous ones
-            success_rate = mpi_average(evaluator.current_success_rate())
-            if rank == 0 and success_rate >= best_success_rate and save_policies:
-                best_success_rate = success_rate
-                best_success_epoch = epoch
-                logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
-                evaluator.save_policy(best_policy_path)
-                evaluator.save_policy(latest_policy_path)
-            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_policies:
-                policy_path = periodic_policy_path.format(epoch)
-                logger.info('Saving periodic policy to {} ...'.format(policy_path))
-                evaluator.save_policy(policy_path)
+        # save the policy if it's better than the previous ones
+        success_rate = mpi_average(evaluator.current_success_rate())
+        if rank == 0 and success_rate >= best_success_rate and save_policies:
+            best_success_rate = success_rate
+            best_success_epoch = epoch
+            logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
+            evaluator.save_policy(best_policy_path)
+            evaluator.save_policy(latest_policy_path)
+        if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_policies:
+            policy_path = periodic_policy_path.format(epoch)
+            logger.info('Saving periodic policy to {} ...'.format(policy_path))
+            evaluator.save_policy(policy_path)
 
-            # make sure that different threads have different seeds
-            logger.info("Best success rate so far ", best_success_rate, " In epoch number ", best_success_epoch)
-            local_uniform = np.random.uniform(size=(1,))
-            root_uniform = local_uniform.copy()
-            MPI.COMM_WORLD.Bcast(root_uniform, root=0)
-            if rank != 0:
-                assert local_uniform[0] != root_uniform[0]
+        # make sure that different threads have different seeds
+        logger.info("Best success rate so far ", best_success_rate, " In epoch number ", best_success_epoch)
+        local_uniform = np.random.uniform(size=(1,))
+        root_uniform = local_uniform.copy()
+        MPI.COMM_WORLD.Bcast(root_uniform, root=0)
+        if rank != 0:
+            assert local_uniform[0] != root_uniform[0]
 
 
 def launch(save_policies=True):
@@ -176,19 +179,15 @@ def launch(save_policies=True):
     rollout_params = {
         'exploit': False,
         'use_target_net': False,
-        # 'use_demo_states': True,
         'compute_Q': False,
         'T': params['T'],
-        #'render': 1,
     }
 
     eval_params = {
         'exploit': True,
         'use_target_net': params['test_with_polyak'],
-        #'use_demo_states': False,
         'compute_Q': True,
         'T': params['T'],
-        #'render': 1,
     }
 
     for name in ['T', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
