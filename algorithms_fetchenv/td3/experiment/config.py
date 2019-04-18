@@ -13,58 +13,67 @@ DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
     },
-    'GazeboWAMemptyEnv-v2': {
-        'n_cycles': 20,
-    },
 }
 
 
 DEFAULT_PARAMS = {
-    # tung: Scope for training (log path, n epochs, etc.)
+    # Scope for training (log path, n epochs, etc.)
     'env_name': 'FetchPickAndPlace-v1',
-    'logdir': '../../logs/td3_her_use_bc_no_qfil_50_cycles_20_batch_1_targnoise_0.1_clipnoise_0.2',
-    'n_epochs': 200,
-    'num_cpu': 1,
+    'logdir': '../../logs/td3_her_bc_1_qfil_0_tar_noise_0.1_1',
+    'num_cpu': 2,
     'seed': 0,
     'policy_save_interval': 10,
     'clip_return': 1,
     'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
-    'target_noise': 0.1,    # Noise add to target's action to compute target
-    'noise_clip': 0.2,      # Clipping noise for target's action
 
-    # env
+    'n_epochs': int(80 * 50),
+    'n_cycles': 50,  # per epoch
+    'rollout_batch_size': 2,  # per mpi thread
+    'n_batches': 40,  # training batches per cycle
+    'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
+    'demo_batch_size': 128,
+    'prm_loss_weight': 0.001,  # Weight corresponding to the primary loss
+    'aux_loss_weight': 0.0078,  # Weight corresponding to the auxilliary loss also called the cloning loss
+
+    # For exploration
+    'random_eps': 0.2,  # percentage of time a random action is taken
+    'noise_eps': 0.1,  # std of gaussian noise added to not-completely-random actions as a percentage of max_u
+    'target_noise': 0.1,    # Std noise add to target's action for smoothing target policy
+    'target_noise_clip': 0.5,      # Clipping noise for target's action
+
+    'bc_loss': 1,  # whether or not to use the behavior cloning loss as an auxilliary loss
+    'q_filter': 0,  # whether or not a Q value filter should be used on the Actor outputs
+    'num_demo': 100,  # number of expert demo episodes
+
+    # Env information
     'max_u': 1.,  # max absolute value of actions on different coordinates
-    # ddpg
+    # Configure network architecture
     'layers': 3,  # number of layers in the critic/actor networks
     'hidden': 256,  # number of neurons in each hidden layers
     'network_class': 'actor_critic:ActorCritic',
+
+    #
     'Q_lr': 0.001,  # critic learning rate
     'pi_lr': 0.001,  # actor learning rate
     'buffer_size': int(1E6),  # for experience replay
-    'polyak': 0.95,  # polyak averaging coefficient
     'action_l2': 1.0,  # quadratic penalty on actions (before rescaling by max_u)
+    'polyak': 0.95,  # polyak averaging coefficient
+
     'clip_obs': 200.,
     'scope': 'td3',  # can be tweaked for testing
     'relative_goals': False,
-    # training
-    'n_cycles': 50,  # per epoch
-    'rollout_batch_size': 2,  # per mpi thread
-    'n_batches': 20,  # training batches per cycle
-    'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
+
+    # For evaluation
     'n_test_rollouts': 10,  # number of test rollouts per epoch, each consists of rollout_batch_size rollouts
     'test_with_polyak': False,  # run test episodes with the target network
-    # exploration
-    'random_eps': 0.2,  # percentage of time a random action is taken
-    'noise_eps': 0.1,  # std of gaussian noise added to not-completely-random actions as a percentage of max_u
+
     # HER
     'replay_strategy': 'future',  # supported modes: future, none
     'replay_k': 4,  # number of additional goals used for replay, only used if off_policy_data=future
+
     # normalization
     'norm_eps': 0.01,  # epsilon used for observation normalization
     'norm_clip': 5,  # normalized observations are cropped to this values
-    'bc_loss': 1, # whether or not to use the behavior cloning loss as an auxilliary loss
-    'q_filter': 0, # whether or not a Q value filter should be used on the Actor outputs
-    'num_demo': 100 # number of expert demo episodes
 }
 
 
@@ -84,7 +93,7 @@ def cached_make_env(make_env):
 
 
 def prepare_params(kwargs):
-    # DDPG params
+    # TD3 params
     td3_params = dict()
 
     env_name = kwargs['env_name']
@@ -108,7 +117,8 @@ def prepare_params(kwargs):
                  'batch_size', 'Q_lr', 'pi_lr',
                  'norm_eps', 'norm_clip', 'max_u',
                  'action_l2', 'clip_obs', 'scope', 'relative_goals',
-                 'target_noise', 'noise_clip']:
+                 'target_noise', 'target_noise_clip', 'prm_loss_weight', 'aux_loss_weight',
+                 'demo_batch_size']:
         td3_params[name] = kwargs[name]
         kwargs['_' + name] = kwargs[name]
         del kwargs[name]
@@ -156,7 +166,7 @@ def configure_td3(dims, params, reuse=False, use_mpi=True, clip_return=True):
 
     input_dims = dims.copy()
 
-    # DDPG agent
+    # TD3 agent
     env = cached_make_env(params['make_env'])
     env.reset()
     td3_params.update({'input_dims': input_dims,  # agent takes an input observations
