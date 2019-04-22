@@ -243,7 +243,7 @@ class RolloutWorkerOriginal:
         for i in range(self.rollout_batch_size):
             self.reset_rollout(i)
 
-    def generate_rollouts(self):
+    def generate_rollouts(self, random_action=False):
         """Performs `rollout_batch_size` rollouts in parallel for time horizon `T` with the current
         policy acting on it accordingly.
         """
@@ -286,7 +286,10 @@ class RolloutWorkerOriginal:
                 try:
                     # We fully ignore the reward here because it will have to be re-computed
                     # for HER.
-                    curr_o_new, _, d, info = self.envs[i].step(u[i])
+                    if random_action:
+                        curr_o_new, _, d, info = self.envs[i].step(self.envs[i].action_space.sample())
+                    else:
+                        curr_o_new, _, d, info = self.envs[i].step(u[i])
                     if 'is_success' in info:
                         success[i] = info['is_success']
                     done[i] = d

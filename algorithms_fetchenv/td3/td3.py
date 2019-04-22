@@ -314,7 +314,7 @@ class TD3(object):
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
-    def train(self, stage=True):
+    def train(self, stage=True, policy_update=True):
         batch = self.sample_batch()
         if stage:
             self.stage_batch(batch)
@@ -322,9 +322,16 @@ class TD3(object):
 
         if stage:
             self.stage_batch(batch)
-        actor_loss, pi_grad, cloning_loss = self._pi_grads()
+        if policy_update:
+            actor_loss, pi_grad, cloning_loss = self._pi_grads()
+        else:
+            actor_loss, _, cloning_loss = self._pi_grads()
+
         self._q_update(Q_grad)
-        self._pi_update(pi_grad)
+
+        if policy_update:
+            self._pi_update(pi_grad)
+
         return critic_1_loss, critic_2_loss, actor_loss, cloning_loss
 
     def _q_grads(self):
