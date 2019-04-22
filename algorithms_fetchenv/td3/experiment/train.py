@@ -18,6 +18,7 @@ from tensorboardX import SummaryWriter
 import sys
 sys.path.append('../../')
 from utils import tensorboard_log
+import pathlib
 
 
 def mpi_average(value):
@@ -30,7 +31,7 @@ def mpi_average(value):
 
 def train(policy, rollout_worker, evaluator,
           n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          save_policies, demo_file, tensorboard, **kwargs):
+          save_policies, demo_file, tensorboard, policy_delay, start_train_eps, **kwargs):
     rank = MPI.COMM_WORLD.Get_rank()
 
     latest_policy_path = os.path.join(logger.get_dir(), 'policy_latest.pkl')
@@ -50,21 +51,31 @@ def train(policy, rollout_worker, evaluator,
 
     for epoch in tqdm(range(n_epochs)):
         # train
-        if epoch % n_cycles == 0:
-            rollout_worker.clear_history()
+        # if epoch % n_cycles == 0:
+        rollout_worker.clear_history()
         # for _ in range(n_cycles):
         logger.info("[INFO] %s" % save_dir)
-        episode = rollout_worker.generate_rollouts()
-        policy.store_episode(episode)
+        if epoch < int(start_train_eps // 2):
+            episode = rollout_worker.generate_rollouts(random_action=True)
+            policy.store_episode(episode)
+        else:
+            episode = rollout_worker.generate_rollouts()
+            policy.store_episode(episode)
 
         total_q1_loss, total_q2_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0, 0.0
-        for _ in range(n_batches):
-            q1_loss, q2_loss, pi_loss, cloning_loss = policy.train()
+        for j in range(n_batches):
+            if j % policy_delay == 0:
+                policy_update = True
+            else:
+                policy_update = False
+            q1_loss, q2_loss, pi_loss, cloning_loss = policy.train(policy_update=policy_update)
             total_q1_loss += q1_loss
             total_q2_loss += q2_loss
             total_pi_loss += pi_loss
             total_cloning_loss += cloning_loss
 
+            # if j % policy_delay == 0:
+            #     policy.update_target_net()
         policy.update_target_net()
 
         # test
@@ -122,9 +133,19 @@ def launch(save_policies=True):
 
     # Prepare params.
     params = config.DEFAULT_PARAMS
-
-    logdir = params['logdir'] + '_' + params['env_name'].split('-')[0]
     env = params['env_name']
+
+    logdir = os.path.join(params['root_savedir'], params['scope'], params['env_name'].split('-')[0], params['logdir'])
+    if not os.path.exists(logdir):
+        pathlib.Path(logdir).mkdir(parents=True, exist_ok=True)
+    #     exp_id = '1'
+    # else:
+    #     exp_id = sorted(os.listdir(logdir))
+    #     exp_id = str(int(exp_id[-1][-1]) + 1)
+    #
+    # logdir = os.path.join(logdir, 'exp_{}'.format(exp_id))
+    # os.mkdir(logdir)
+
     n_epochs = params['n_epochs']
     num_cpu = params['num_cpu']
     seed = params['seed']
@@ -162,8 +183,6 @@ def launch(save_policies=True):
     set_global_seeds(rank_seed)
     resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
 
-    # params['env_name'] = env
-    # params['replay_strategy'] = replay_strategy
     if env in config.DEFAULT_ENV_PARAMS:
         params.update(config.DEFAULT_ENV_PARAMS[env])  # merge env-specific parameters in
     # params.update(**override_params)  # makes it possible to override any parameter
@@ -204,7 +223,8 @@ def launch(save_policies=True):
           evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
           n_cycles=params['n_cycles'], n_batches=params['n_batches'],
           policy_save_interval=policy_save_interval, save_policies=save_policies, demo_file=demo_file,
-          tensorboard=tensorboard)
+          tensorboard=tensorboard,
+          policy_delay=params['policy_delay'], start_train_eps=params['start_train_eps'])
 
 
 def main():

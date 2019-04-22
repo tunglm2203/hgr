@@ -18,18 +18,22 @@ DEFAULT_ENV_PARAMS = {
 
 DEFAULT_PARAMS = {
     # Scope for training (log path, n epochs, etc.)
+    'root_savedir': '../../logs',
+    'scope': 'td3_her',  # can be tweaked for testing
     'env_name': 'FetchPickAndPlace-v1',
-    'logdir': '../../logs/td3_her_bc_1_qfil_0_tar_noise_0.1_1',
-    'num_cpu': 2,
+    'logdir': 'use_bc_no_qfil_polyak_0.95_delayupdate_4_bs_256_tarnoise_0.2_starttraining_0_modify_update_targ',
+    'num_cpu': 19,
     'seed': 0,
     'policy_save_interval': 10,
-    'clip_return': 1,
+    'clip_return': 1.,
     'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
 
+    'start_train_eps': 0,  # Number of steps to start using policy
+    'policy_delay': 4,  # Delay policy update
     'n_epochs': int(80 * 50),
     'n_cycles': 50,  # per epoch
     'rollout_batch_size': 2,  # per mpi thread
-    'n_batches': 40,  # training batches per cycle
+    'n_batches': 50,  # training batches per cycle
     'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
     'demo_batch_size': 128,
     'prm_loss_weight': 0.001,  # Weight corresponding to the primary loss
@@ -38,7 +42,7 @@ DEFAULT_PARAMS = {
     # For exploration
     'random_eps': 0.2,  # percentage of time a random action is taken
     'noise_eps': 0.1,  # std of gaussian noise added to not-completely-random actions as a percentage of max_u
-    'target_noise': 0.1,    # Std noise add to target's action for smoothing target policy
+    'target_noise': 0.2,    # Std noise add to target's action for smoothing target policy
     'target_noise_clip': 0.5,      # Clipping noise for target's action
 
     'bc_loss': 1,  # whether or not to use the behavior cloning loss as an auxilliary loss
@@ -60,7 +64,6 @@ DEFAULT_PARAMS = {
     'polyak': 0.95,  # polyak averaging coefficient
 
     'clip_obs': 200.,
-    'scope': 'td3',  # can be tweaked for testing
     'relative_goals': False,
 
     # For evaluation
@@ -123,7 +126,6 @@ def prepare_params(kwargs):
         kwargs['_' + name] = kwargs[name]
         del kwargs[name]
     kwargs['td3_params'] = td3_params
-
     return kwargs
 
 
