@@ -339,14 +339,15 @@ class DDPG(object):
 
         if stage:
             self.stage_batch(batch)
-        actor_loss, pi_grad = self.sess.run([
+        actor_loss, pi_grad, cloning_loss = self.sess.run([
             self.pi_loss_tf,
-            self.pi_grad_tf
+            self.pi_grad_tf,
+            self.cloning_loss_tf
         ])
 
         self.Q_adam.update(Q_grad, self.Q_lr)
         self.pi_adam.update(pi_grad, self.pi_lr)
-        return critic_loss, actor_loss
+        return critic_loss, actor_loss, cloning_loss
 
     def _init_target_net(self):
         self.sess.run(self.init_target_net_op)

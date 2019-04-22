@@ -127,16 +127,10 @@ def launch(save_policies=True):
     logdir = os.path.join(params['root_savedir'], params['scope'], params['env_name'].split('-')[0], params['logdir'])
     if not os.path.exists(logdir):
         pathlib.Path(logdir).mkdir(parents=True, exist_ok=True)
-        exp_id = '1'
-    else:
-        exp_id = sorted(os.listdir(logdir))
-        exp_id = str(int(exp_id[-1][-1]) + 1)
 
-    logdir = os.path.join(logdir, 'exp_{}'.format(exp_id))
-    os.mkdir(logdir)
-    import pdb; pdb.set_trace()
+    # logdir = os.path.join(logdir, 'exp_{}'.format(exp_id))
+    # os.mkdir(logdir)
 
-    logdir = params['logdir'] + '_' + params['env_name'].split('-')[0]
     n_epochs = params['n_epochs']
     num_cpu = params['num_cpu']
     seed = params['seed']
