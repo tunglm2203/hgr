@@ -1,49 +1,33 @@
+import os
 import numpy as np
 import gym
 
-import sys
-sys.path.insert(0, '../')
-from ddpg import DDPG
-
 from baselines import logger
-from her import make_sample_her_transitions
-
+from baselines.her.ddpg import DDPG
+from baselines.her.her_sampler import make_sample_her_transitions
+from baselines.bench.monitor import Monitor
 
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
     },
-    'GazeboWAMemptyEnv-v2': {
-        'n_cycles': 20,
-    },
 }
 
 
 DEFAULT_PARAMS = {
-    # tung: Scope for training (log path, n epochs, etc.)
-    'root_savedir': '../../logs',
-    'scope': 'ddpg_her',  # can be tweaked for testing
-    'env_name': 'FetchPickAndPlace-v1',
-    'logdir': 'use_bc_no_qfil_modify_act_noise',
-    'n_epochs': 80,
-    'num_cpu': 2,
-    'seed': 0,
-    'policy_save_interval': 10,
-    'clip_return': 1,
-    'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
-
     # env
     'max_u': 1.,  # max absolute value of actions on different coordinates
     # ddpg
     'layers': 3,  # number of layers in the critic/actor networks
     'hidden': 256,  # number of neurons in each hidden layers
-    'network_class': 'actor_critic:ActorCritic',
+    'network_class': 'baselines.her.actor_critic:ActorCritic',
     'Q_lr': 0.001,  # critic learning rate
     'pi_lr': 0.001,  # actor learning rate
     'buffer_size': int(1E6),  # for experience replay
     'polyak': 0.95,  # polyak averaging coefficient
     'action_l2': 1.0,  # quadratic penalty on actions (before rescaling by max_u)
     'clip_obs': 200.,
+    'scope': 'ddpg',  # can be tweaked for testing
     'relative_goals': False,
     # training
     'n_cycles': 50,  # per epoch
@@ -53,17 +37,21 @@ DEFAULT_PARAMS = {
     'n_test_rollouts': 10,  # number of test rollouts per epoch, each consists of rollout_batch_size rollouts
     'test_with_polyak': False,  # run test episodes with the target network
     # exploration
-    'random_eps': 0.2,  # percentage of time a random action is taken
-    'noise_eps': 0.1,  # std of gaussian noise added to not-completely-random actions as a percentage of max_u
+    'random_eps': 0.3,  # percentage of time a random action is taken
+    'noise_eps': 0.2,  # std of gaussian noise added to not-completely-random actions as a percentage of max_u
     # HER
     'replay_strategy': 'future',  # supported modes: future, none
     'replay_k': 4,  # number of additional goals used for replay, only used if off_policy_data=future
     # normalization
     'norm_eps': 0.01,  # epsilon used for observation normalization
     'norm_clip': 5,  # normalized observations are cropped to this values
-    'bc_loss': 1, # whether or not to use the behavior cloning loss as an auxilliary loss
+
+    'bc_loss': 0, # whether or not to use the behavior cloning loss as an auxilliary loss
     'q_filter': 0, # whether or not a Q value filter should be used on the Actor outputs
-    'num_demo': 100 # number of expert demo episodes
+    'num_demo': 100, # number of expert demo episodes
+    'demo_batch_size': 128, #number of samples to be used from the demonstrations buffer, per mpi thread 128/1024 or 32/256
+    'prm_loss_weight': 0.001, #Weight corresponding to the primary loss
+    'aux_loss_weight':  0.0078, #Weight corresponding to the auxilliary loss also called the cloning loss
 }
 
 
@@ -85,16 +73,32 @@ def cached_make_env(make_env):
 def prepare_params(kwargs):
     # DDPG params
     ddpg_params = dict()
-
     env_name = kwargs['env_name']
 
-    def make_env():
-        return gym.make(env_name)
+    def make_env(subrank=None):
+        env = gym.make(env_name)
+        if subrank is not None and logger.get_dir() is not None:
+            try:
+                from mpi4py import MPI
+                mpi_rank = MPI.COMM_WORLD.Get_rank()
+            except ImportError:
+                MPI = None
+                mpi_rank = 0
+                logger.warn('Running with a single MPI process. This should work, but the results may differ from the ones publshed in Plappert et al.')
+
+            max_episode_steps = env._max_episode_steps
+            env =  Monitor(env,
+                           os.path.join(logger.get_dir(), str(mpi_rank) + '.' + str(subrank)),
+                           allow_early_resets=True)
+            # hack to re-expose _max_episode_steps (ideally should replace reliance on it downstream)
+            env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
+        return env
+
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
     assert hasattr(tmp_env, '_max_episode_steps')
     kwargs['T'] = tmp_env._max_episode_steps
-    tmp_env.reset()
+
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
     kwargs['gamma'] = 1. - 1. / kwargs['T']
     if 'lr' in kwargs:
@@ -168,6 +172,9 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
                         'bc_loss': params['bc_loss'],
                         'q_filter': params['q_filter'],
                         'num_demo': params['num_demo'],
+                        'demo_batch_size': params['demo_batch_size'],
+                        'prm_loss_weight': params['prm_loss_weight'],
+                        'aux_loss_weight': params['aux_loss_weight'],
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],
@@ -179,15 +186,13 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
 def configure_dims(params):
     env = cached_make_env(params['make_env'])
     env.reset()
-    obs, _, done, info = env.step(env.action_space.sample())
+    obs, _, _, info = env.step(env.action_space.sample())
 
     dims = {
         'o': obs['observation'].shape[0],
         'u': env.action_space.shape[0],
         'g': obs['desired_goal'].shape[0],
-        'd': np.array([done]).shape[0]
     }
-
     for key, value in info.items():
         value = np.array(value)
         if value.ndim == 0:

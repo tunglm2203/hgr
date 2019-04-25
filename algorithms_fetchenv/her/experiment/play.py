@@ -1,17 +1,18 @@
+# DEPRECATED, use --play flag to baselines.run instead
 import click
 import numpy as np
 import pickle
 
 from baselines import logger
 from baselines.common import set_global_seeds
-import config
-from rollout import RolloutWorker, RolloutWorkerOriginal
+import baselines.her.experiment.config as config
+from baselines.her.rollout import RolloutWorker
 
 
 @click.command()
-@click.option('--policy_file', type=str, default='../../../logs/ddpg_her/policy_best.pkl')
+@click.argument('policy_file', type=str)
 @click.option('--seed', type=int, default=0)
-@click.option('--n_test_rollouts', type=int, default=100)
+@click.option('--n_test_rollouts', type=int, default=10)
 @click.option('--render', type=int, default=1)
 def main(policy_file, seed, n_test_rollouts, render):
     set_global_seeds(seed)
@@ -31,35 +32,19 @@ def main(policy_file, seed, n_test_rollouts, render):
 
     dims = config.configure_dims(params)
 
-    if params['env_name'] == 'GazeboWAMemptyEnv-v1':
-        eval_params = {
-            'exploit': True,
-            'use_target_net': params['test_with_polyak'],
-            'compute_Q': True,
-            'rollout_batch_size': 1,
-            #'render': bool(render),
-        }
+    eval_params = {
+        'exploit': True,
+        'use_target_net': params['test_with_polyak'],
+        'compute_Q': True,
+        'rollout_batch_size': 1,
+        'render': bool(render),
+    }
 
-        for name in ['T', 'gamma', 'noise_eps', 'random_eps']:
-            eval_params[name] = params[name]
+    for name in ['T', 'gamma', 'noise_eps', 'random_eps']:
+        eval_params[name] = params[name]
 
-        madeEnv = config.cached_make_env(params['make_env'])
-        evaluator = RolloutWorker(madeEnv, params['make_env'], policy, dims, logger, **eval_params)
-        evaluator.seed(seed)
-    else:
-        eval_params = {
-            'exploit': True,
-            'use_target_net': params['test_with_polyak'],
-            'compute_Q': True,
-            'rollout_batch_size': 1,
-            'render': bool(render),
-        }
-
-        for name in ['T', 'gamma', 'noise_eps', 'random_eps']:
-            eval_params[name] = params[name]
-
-        evaluator = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **eval_params)
-        evaluator.seed(seed)
+    evaluator = RolloutWorker(params['make_env'], policy, dims, logger, **eval_params)
+    evaluator.seed(seed)
 
     # Run evaluation.
     evaluator.clear_history()
