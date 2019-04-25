@@ -20,6 +20,7 @@ from tensorboardX import SummaryWriter
 import sys
 sys.path.append('../../')
 from utils import tensorboard_log
+import pathlib
 
 
 def mpi_average(value):
@@ -39,23 +40,33 @@ def train(policy, rollout_worker, evaluator,
     best_policy_path = os.path.join(logger.get_dir(), 'policy_best.pkl')
     periodic_policy_path = os.path.join(logger.get_dir(), 'policy_{}.pkl')
 
+    save_dir = logger.get_dir()
+
     logger.info("Training...")
     best_success_rate = -1
     best_success_epoch = 0
 
     if policy.bc_loss == 1:
         print('Initializing demonstration buffer...')
-        policy.initDemoBuffer(demo_file)  #initializwe demo buffer
+        # policy.initDemoBuffer(demo_file)  #initializwe demo buffer
+        policy.initDemoBuffer(demo_file, load_from_pickle=True, pickle_file='demo_pickandplace.pkl')
 
-    for epoch in tqdm(range(n_epochs)):
+    for epoch in tqdm(range(n_epochs * n_cycles)):
         # train
-        rollout_worker.clear_history()
-        for _ in range(n_cycles):
-            episode = rollout_worker.generate_rollouts()
-            policy.store_episode(episode)
-            for _ in range(n_batches):
-                policy.train()
-            policy.update_target_net()
+        if epoch % n_cycles == 0:
+            rollout_worker.clear_history()
+        # for _ in range(n_cycles):
+        logger.info("[INFO] %s" % save_dir)
+        episode = rollout_worker.generate_rollouts()
+        policy.store_episode(episode)
+
+        total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
+        for _ in range(n_batches):
+            q_loss, pi_loss, cloning_loss = policy.train()
+            total_q1_loss += q_loss
+            total_pi_loss += pi_loss
+            total_cloning_loss += cloning_loss
+        policy.update_target_net()
 
         # test
         logger.info("Testing")
@@ -76,11 +87,14 @@ def train(policy, rollout_worker, evaluator,
         for key, val in policy.logs():
             logger.record_tabular(key, mpi_average(val))
             log_dict[key] = mpi_average(val)
-
+        log_dict['q1_loss'] = total_q1_loss / n_batches
+        log_dict['pi_loss'] = total_pi_loss / n_batches
+        log_dict['cloning_loss'] = total_cloning_loss / n_batches
         if rank == 0:
             logger.dump_tabular()
 
-        tensorboard_log(tensorboard, log_dict, epoch)
+        # tensorboard_log(tensorboard, log_dict, epoch)
+        tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
 
         # save the policy if it's better than the previous ones
         success_rate = mpi_average(evaluator.current_success_rate())
@@ -104,8 +118,25 @@ def train(policy, rollout_worker, evaluator,
             assert local_uniform[0] != root_uniform[0]
 
 
-def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_interval,
-           clip_return, demo_file=None, override_params={}, save_policies=True):
+def launch(save_policies=True):
+
+    # Prepare params.
+    params = config.DEFAULT_PARAMS
+    env = params['env_name']
+
+    logdir = os.path.join(params['root_savedir'], params['scope'], params['env_name'].split('-')[0], params['logdir'])
+    if not os.path.exists(logdir):
+        pathlib.Path(logdir).mkdir(parents=True, exist_ok=True)
+
+    # logdir = os.path.join(logdir, 'exp_{}'.format(exp_id))
+    # os.mkdir(logdir)
+
+    n_epochs = params['n_epochs']
+    num_cpu = params['num_cpu']
+    seed = params['seed']
+    policy_save_interval = params['policy_save_interval']
+    clip_return = params['clip_return']
+    demo_file = params['demo_file']
 
     tensorboard = SummaryWriter(logdir)
     # Fork for multi-CPU MPI implementation.
@@ -137,13 +168,11 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     set_global_seeds(rank_seed)
     resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
 
-    # Prepare params.
-    params = config.DEFAULT_PARAMS
-    params['env_name'] = env
-    params['replay_strategy'] = replay_strategy
+    # params['env_name'] = env
+    # params['replay_strategy'] = replay_strategy
     if env in config.DEFAULT_ENV_PARAMS:
         params.update(config.DEFAULT_ENV_PARAMS[env])  # merge env-specific parameters in
-    params.update(**override_params)  # makes it possible to override any parameter
+    # params.update(**override_params)  # makes it possible to override any parameter
 
     with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
         json.dump(params, f)
@@ -156,7 +185,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     rollout_params = {
         'exploit': False,
         'use_target_net': False,
-        'use_demo_states': True,
+        # 'use_demo_states': True,
         'compute_Q': False,
         'T': params['T'],
         #'render': 1,
@@ -181,26 +210,15 @@ def launch(env, logdir, n_epochs, num_cpu, seed, replay_strategy, policy_save_in
     evaluator = RolloutWorkerOriginal(params['make_env'], policy, dims, logger, **eval_params)
     evaluator.seed(rank_seed)
 
-    train(logdir=logdir, policy=policy, rollout_worker=rollout_worker,
+    train(policy=policy, rollout_worker=rollout_worker,
           evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
           n_cycles=params['n_cycles'], n_batches=params['n_batches'],
           policy_save_interval=policy_save_interval, save_policies=save_policies, demo_file=demo_file,
           tensorboard=tensorboard)
 
-
-@click.command()
-@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the OpenAI Gym environment that you want to train on')
-@click.option('--logdir', type=str, default='../../../logs/ddpg_her_use_BC_use_Qfilter_200_epochs_10_cpus', help='Path to save logs. If not specified, creates a folder in /tmp/')
-@click.option('--n_epochs', type=int, default=200, help='the number of training epochs to run')
-@click.option('--num_cpu', type=int, default=10, help='the number of CPU cores to use (using MPI)')
-@click.option('--seed', type=int, default=0, help='the random seed used to seed both the environment and the training code')
-@click.option('--policy_save_interval', type=int, default=10, help='the interval with which policy pickles are saved. If set to 0, only the best and latest policy will be pickled.')
-@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
-@click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default='../data_fetch_random_100.npz', help='demo data file path')
-def main(**kwargs):
-    launch(**kwargs)
-
+    
+def main():
+    launch()
 
 if __name__ == '__main__':
     main()

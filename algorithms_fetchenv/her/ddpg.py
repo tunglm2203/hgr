@@ -11,6 +11,8 @@ from replay_buffer import ReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
 from baselines.her.util import convert_episode_to_batch_major
 from tqdm import tqdm
+import pickle
+
 
 def dims_to_shapes(input_dims):
     return {key: tuple([val]) if val > 0 else tuple() for key, val in input_dims.items()}
@@ -75,8 +77,10 @@ class DDPG(object):
             if key.startswith('info_'):
                 continue
             stage_shapes[key] = (None, *input_shapes[key])
-        for key in ['o', 'g']:
-            stage_shapes[key + '_2'] = stage_shapes[key]
+        # for key in ['o', 'g']:
+        #     stage_shapes[key + '_2'] = stage_shapes[key]
+        stage_shapes['o_2'] = stage_shapes['o']
+        stage_shapes['g_2'] = stage_shapes['g']
         stage_shapes['r'] = (None,)
         self.stage_shapes = stage_shapes
 
@@ -100,7 +104,7 @@ class DDPG(object):
         buffer_size = (self.buffer_size // self.rollout_batch_size) * self.rollout_batch_size
         self.buffer = ReplayBuffer(buffer_shapes, buffer_size, self.T, self.sample_transitions)
         global demoBuffer
-        demoBuffer = ReplayBuffer(buffer_shapes, buffer_size, self.T, self.sample_transitions)
+        demoBuffer = ReplayBuffer(buffer_shapes, self.num_demo * self.rollout_batch_size * self.T, self.T, self.sample_transitions)
 
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
@@ -148,57 +152,103 @@ class DDPG(object):
         else:
             return ret
 
-    def initDemoBuffer(self, demoDataFile, update_stats=True):
+    def initDemoBuffer(self, demoDataFile, update_stats=True, load_from_pickle=False, pickle_file=''):
 
-        demoData = np.load(demoDataFile)
-        info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.T, 1, self.input_dims['info_' + key]), np.float32) for key
-                       in info_keys]    # tung: modify demo buffer
+        if not load_from_pickle:
+            demoData = np.load(demoDataFile)
+            info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
+            info_values = [np.empty((self.T, 1, self.input_dims['info_' + key]), np.float32) for key
+                           in info_keys]    # tung: modify demo buffer
 
-        for epsd in tqdm(range(self.num_demo)):
-            obs, acts, goals, achieved_goals = [], [], [], []
-            i = 0
-            for transition in range(self.T):
-                obs.append([demoData['obs'][epsd ][transition].get('observation')])
-                acts.append([demoData['acs'][epsd][transition]])
-                goals.append([demoData['obs'][epsd][transition].get('desired_goal')])
-                achieved_goals.append([demoData['obs'][epsd][transition].get('achieved_goal')])
-                for idx, key in enumerate(info_keys):
-                    info_values[idx][transition, i] = demoData['info'][epsd][transition][key]
+            for epsd in tqdm(range(self.num_demo)):
+                obs, acts, goals, achieved_goals, dones = [], [], [], [], []
+                i = 0
+                done_ep = np.zeros((1, 1))
+                for transition in range(self.T):
+                    obs.append([demoData['obs'][epsd ][transition].get('observation')])
+                    acts.append([demoData['acs'][epsd][transition]])
+                    goals.append([demoData['obs'][epsd][transition].get('desired_goal')])
+                    achieved_goals.append([demoData['obs'][epsd][transition].get('achieved_goal')])
+                    done_ep[0] = [demoData['done'][epsd][transition]]
+                    dones.append(done_ep.copy())
+                    for idx, key in enumerate(info_keys):
+                        info_values[idx][transition, i] = demoData['info'][epsd][transition][key]
 
-            obs.append([demoData['obs'][epsd][self.T].get('observation')])
-            achieved_goals.append([demoData['obs'][epsd][self.T].get('achieved_goal')])
+                obs.append([demoData['obs'][epsd][self.T].get('observation')])
+                achieved_goals.append([demoData['obs'][epsd][self.T].get('achieved_goal')])
 
-            episode = dict(o=obs,
-                           u=acts,
-                           g=goals,
-                           ag=achieved_goals)
-            for key, value in zip(info_keys, info_values):
-                episode['info_{}'.format(key)] = value
+                episode = dict(o=obs,
+                               u=acts,
+                               g=goals,
+                               ag=achieved_goals,
+                               d=dones)
+                for key, value in zip(info_keys, info_values):
+                    episode['info_{}'.format(key)] = value
+                episode = convert_episode_to_batch_major(episode)
+                global demoBuffer
+                demoBuffer.store_episode(episode)
 
-            episode = convert_episode_to_batch_major(episode)
-            global demoBuffer
-            demoBuffer.store_episode(episode)
+                print("Demo buffer size currently ", demoBuffer.get_current_size())
 
-            print("Demo buffer size currently ", demoBuffer.get_current_size())
+                if update_stats:
+                    # add transitions to normalizer to normalize the demo data as well
+                    episode['o_2'] = episode['o'][:, 1:, :]
+                    episode['ag_2'] = episode['ag'][:, 1:, :]
+                    num_normalizing_transitions = transitions_in_episode_batch(episode)
+                    transitions = self.sample_transitions(episode, num_normalizing_transitions)
 
-            if update_stats:
-                # add transitions to normalizer to normalize the demo data as well
-                episode['o_2'] = episode['o'][:, 1:, :]
-                episode['ag_2'] = episode['ag'][:, 1:, :]
-                num_normalizing_transitions = transitions_in_episode_batch(episode)
-                transitions = self.sample_transitions(episode, num_normalizing_transitions)
+                    o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
+                    transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+                    # No need to preprocess the o_2 and g_2 since this is only used for stats
 
-                o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
-                transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
-                # No need to preprocess the o_2 and g_2 since this is only used for stats
+                    self.o_stats.update(transitions['o'])
+                    self.g_stats.update(transitions['g'])
 
-                self.o_stats.update(transitions['o'])
-                self.g_stats.update(transitions['g'])
+                    self.o_stats.recompute_stats()
+                    self.g_stats.recompute_stats()
+                episode.clear()
+            with open('demo_pickandplace.pkl', 'wb') as f:
+                data = {
+                    'current_size': demoBuffer.current_size,
+                    'n_transitions_stored': demoBuffer.n_transitions_stored,
+                    'buffers': demoBuffer.buffers,
+                }
+                pickle.dump(data, f)
+        else:
+            pickle_in = open(pickle_file, "rb")
+            _data = pickle.load(pickle_in)
+            # global demoBuffer
+            demoBuffer.current_size = _data['current_size']
+            demoBuffer.n_transitions_stored = _data['n_transitions_stored']
+            demoBuffer.buffers = _data['buffers'].copy()
+            del _data
 
-                self.o_stats.recompute_stats()
-                self.g_stats.recompute_stats()
-            episode.clear()
+            for epsd in tqdm(range(self.num_demo)):
+                episode = {}
+                episode['o'] = demoBuffer.buffers['o'][None, epsd]
+                episode['ag'] = demoBuffer.buffers['ag'][None, epsd]
+                episode['g'] = demoBuffer.buffers['g'][None, epsd]
+                episode['u'] = demoBuffer.buffers['u'][None, epsd]
+
+                print("Demo buffer size currently ", demoBuffer.get_current_size())
+
+                if update_stats:
+                    # add transitions to normalizer to normalize the demo data as well
+                    episode['o_2'] = episode['o'][:, 1:, :]
+                    episode['ag_2'] = episode['ag'][:, 1:, :]
+                    num_normalizing_transitions = transitions_in_episode_batch(episode)
+                    transitions = self.sample_transitions(episode, num_normalizing_transitions)
+
+                    o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
+                    transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+                    # No need to preprocess the o_2 and g_2 since this is only used for stats
+
+                    self.o_stats.update(transitions['o'])
+                    self.g_stats.update(transitions['g'])
+
+                    self.o_stats.recompute_stats()
+                    self.g_stats.recompute_stats()
+                episode.clear()
 
     def store_episode(self, episode_batch, update_stats=True):
         """
@@ -278,11 +328,26 @@ class DDPG(object):
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
     def train(self, stage=True):
+        batch = self.sample_batch()
         if stage:
-            self.stage_batch()
-        critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
-        self._update(Q_grad, pi_grad)
-        return critic_loss, actor_loss
+            self.stage_batch(batch)
+
+        critic_loss, Q_grad = self.sess.run([
+            self.Q_loss_tf,
+            self.Q_grad_tf,
+        ])
+
+        if stage:
+            self.stage_batch(batch)
+        actor_loss, pi_grad, cloning_loss = self.sess.run([
+            self.pi_loss_tf,
+            self.pi_grad_tf,
+            self.cloning_loss_tf
+        ])
+
+        self.Q_adam.update(Q_grad, self.Q_lr)
+        self.pi_adam.update(pi_grad, self.pi_lr)
+        return critic_loss, actor_loss, cloning_loss
 
     def _init_target_net(self):
         self.sess.run(self.init_target_net_op)
@@ -383,8 +448,6 @@ class DDPG(object):
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
         assert len(self._vars('main/Q')) == len(Q_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
-        self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/Q'))
-        self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
         self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/Q'))
         self.pi_grad_tf = flatten_grads(grads=pi_grads_tf, var_list=self._vars('main/pi'))
 
@@ -405,6 +468,10 @@ class DDPG(object):
         tf.variables_initializer(self._global_vars('')).run()
         self._sync_optimizers()
         self._init_target_net()
+
+        # Add ops to save and restore all the variables.
+        train_writer = tf.summary.FileWriter('./model_test_ddpg')
+        train_writer.add_graph(self.sess.graph)
 
     def logs(self, prefix=''):
         logs = []

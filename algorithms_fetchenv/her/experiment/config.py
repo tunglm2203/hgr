@@ -2,10 +2,10 @@ import numpy as np
 import gym
 
 import sys
-sys.path.append('../')
+sys.path.insert(0, '../')
+from ddpg import DDPG
 
 from baselines import logger
-from ddpg import DDPG
 from her import make_sample_her_transitions
 
 
@@ -20,19 +20,30 @@ DEFAULT_ENV_PARAMS = {
 
 
 DEFAULT_PARAMS = {
+    # tung: Scope for training (log path, n epochs, etc.)
+    'root_savedir': '../../logs',
+    'scope': 'ddpg_her',  # can be tweaked for testing
+    'env_name': 'FetchPickAndPlace-v1',
+    'logdir': 'use_bc_no_qfil_modify_act_noise',
+    'n_epochs': 80,
+    'num_cpu': 2,
+    'seed': 0,
+    'policy_save_interval': 10,
+    'clip_return': 1,
+    'demo_file': '../data_generation/demonstration_FetchPickAndPlace_100_best.npz',
+
     # env
     'max_u': 1.,  # max absolute value of actions on different coordinates
     # ddpg
     'layers': 3,  # number of layers in the critic/actor networks
     'hidden': 256,  # number of neurons in each hidden layers
-    'network_class': 'baselines.her.actor_critic:ActorCritic',
+    'network_class': 'actor_critic:ActorCritic',
     'Q_lr': 0.001,  # critic learning rate
     'pi_lr': 0.001,  # actor learning rate
     'buffer_size': int(1E6),  # for experience replay
     'polyak': 0.95,  # polyak averaging coefficient
     'action_l2': 1.0,  # quadratic penalty on actions (before rescaling by max_u)
     'clip_obs': 200.,
-    'scope': 'ddpg',  # can be tweaked for testing
     'relative_goals': False,
     # training
     'n_cycles': 50,  # per epoch
@@ -168,12 +179,13 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
 def configure_dims(params):
     env = cached_make_env(params['make_env'])
     env.reset()
-    obs, _, _, info = env.step(env.action_space.sample())
+    obs, _, done, info = env.step(env.action_space.sample())
 
     dims = {
         'o': obs['observation'].shape[0],
         'u': env.action_space.shape[0],
         'g': obs['desired_goal'].shape[0],
+        'd': np.array([done]).shape[0]
     }
 
     for key, value in info.items():

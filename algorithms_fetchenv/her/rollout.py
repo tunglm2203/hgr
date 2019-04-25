@@ -256,7 +256,7 @@ class RolloutWorkerOriginal:
         ag[:] = self.initial_ag
 
         # generate episodes
-        obs, achieved_goals, acts, goals, successes = [], [], [], [], []
+        obs, achieved_goals, acts, goals, successes, dones = [], [], [], [], [], []
         info_values = [np.empty((self.T, self.rollout_batch_size, self.dims['info_' + key]), np.float32) for key in self.info_keys]
         Qs = []
         for t in range(self.T):
@@ -280,14 +280,16 @@ class RolloutWorkerOriginal:
             o_new = np.empty((self.rollout_batch_size, self.dims['o']))
             ag_new = np.empty((self.rollout_batch_size, self.dims['g']))
             success = np.zeros(self.rollout_batch_size)
+            done = np.zeros((self.rollout_batch_size, self.dims['d']))
             # compute new states and observations
             for i in range(self.rollout_batch_size):
                 try:
                     # We fully ignore the reward here because it will have to be re-computed
                     # for HER.
-                    curr_o_new, _, _, info = self.envs[i].step(u[i])
+                    curr_o_new, _, d, info = self.envs[i].step(u[i])
                     if 'is_success' in info:
                         success[i] = info['is_success']
+                    done[i] = d
                     o_new[i] = curr_o_new['observation']
                     ag_new[i] = curr_o_new['achieved_goal']
                     for idx, key in enumerate(self.info_keys):
@@ -307,6 +309,8 @@ class RolloutWorkerOriginal:
             successes.append(success.copy())
             acts.append(u.copy())
             goals.append(self.g.copy())
+            dones.append(done.copy())
+
             o[...] = o_new
             ag[...] = ag_new
         obs.append(o.copy())
@@ -316,7 +320,8 @@ class RolloutWorkerOriginal:
         episode = dict(o=obs,
                        u=acts,
                        g=goals,
-                       ag=achieved_goals)
+                       ag=achieved_goals,
+                       d=dones)
         for key, value in zip(self.info_keys, info_values):
             episode['info_{}'.format(key)] = value
 
@@ -438,7 +443,7 @@ class my_RolloutWorkerOriginal:
         ag[:] = self.initial_ag
 
         # generate episodes
-        obs, achieved_goals, acts, goals, successes = [], [], [], [], []
+        obs, achieved_goals, acts, goals, successes, dones = [], [], [], [], [], []
         rews, reward, full_obs = [], 0, []
         info_values = [np.empty((self.T, self.rollout_batch_size, self.dims['info_' + key]), np.float32) for key in self.info_keys]
         Qs = []
@@ -463,13 +468,15 @@ class my_RolloutWorkerOriginal:
             o_new = np.empty((self.rollout_batch_size, self.dims['o']))
             ag_new = np.empty((self.rollout_batch_size, self.dims['g']))
             success = np.zeros(self.rollout_batch_size)
+            done = np.zeros((self.rollout_batch_size, self.dims['d']))
             # compute new states and observations
             for i in range(self.rollout_batch_size):
                 try:
-                    curr_o_new, reward, _, info = self.envs[i].step(u[i])
+                    curr_o_new, reward, d, info = self.envs[i].step(u[i])
                     assert 'is_success' in info, '[AIM]: Modifying to only use with sparse environment'
                     if 'is_success' in info:
                         success[i] = info['is_success']
+                    done[i] = d
                     o_new[i] = curr_o_new['observation']
                     ag_new[i] = curr_o_new['achieved_goal']
                     for idx, key in enumerate(self.info_keys):
@@ -489,8 +496,10 @@ class my_RolloutWorkerOriginal:
             successes.append(success.copy())
             acts.append(u.copy())
             goals.append(self.g.copy())
+            dones.append(done.copy())
             rews.append([reward])     # tung: add
             full_obs.append(curr_o_new)     # tung: add
+
             o[...] = o_new
             ag[...] = ag_new
         obs.append(o.copy())
@@ -502,7 +511,8 @@ class my_RolloutWorkerOriginal:
                        u=acts,
                        g=goals,
                        ag=achieved_goals,
-                       r=rews)
+                       r=rews,
+                       d=dones)
         for key, value in zip(self.info_keys, info_values):
             episode['info_{}'.format(key)] = value
 

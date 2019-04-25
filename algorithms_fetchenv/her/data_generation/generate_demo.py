@@ -57,10 +57,10 @@ def compute_success_rate(infos):
 
 
 @click.command()
-@click.option('--policy_file', type=str, default='../../../logs/ddpg_her/policy_best.pkl')
+@click.option('--policy_file', type=str, default='../../../logs/ddpg_her_no_BC_no_Qfilter_200_epochs_10_cpus/policy_best.pkl')
 @click.option('--seed', type=int, default=0)
-@click.option('--render', type=int, default=0)
-@click.option('--n_demos', type=int, default=100)
+@click.option('--render', type=int, default=1)
+@click.option('--n_demos', type=int, default=1000)
 @click.option('--save_demo', type=str, default='')
 @click.option('--use_with_ddpg_her', type=int, default=1)
 def main(policy_file, seed, save_demo, render, n_demos, use_with_ddpg_her):
@@ -77,6 +77,7 @@ def main(policy_file, seed, save_demo, render, n_demos, use_with_ddpg_her):
     observations = []
     rewards = []
     infos = []
+    dones = []
 
     # Prepare params.
     params = config.DEFAULT_PARAMS
@@ -122,6 +123,7 @@ def main(policy_file, seed, save_demo, render, n_demos, use_with_ddpg_her):
             actions.append(np.squeeze(episode['u'].copy()))
             rewards.append(np.squeeze(episode['r'].copy()))
             ep_returns.append(np.sum((np.squeeze(episode['r']))))
+            dones.append(np.squeeze(episode['d'].copy()))
 
             # Conver info into same format in gym
             info_e = []
@@ -140,7 +142,8 @@ def main(policy_file, seed, save_demo, render, n_demos, use_with_ddpg_her):
     logger.dump_tabular()
 
     fileName = os.path.join(save_demo, 'demonstration_' + env_name.split('-')[0])
-    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations, rews=rewards, acs=actions, info=infos)
+    np.savez_compressed(fileName, ep_rets=ep_returns, obs=observations,
+                        rews=rewards, acs=actions, info=infos, done=dones)
 
     # Check saved demonstration
     demo = np.load(fileName + '.npz')
