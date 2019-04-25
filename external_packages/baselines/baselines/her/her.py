@@ -10,6 +10,8 @@ from baselines.common import set_global_seeds, tf_util
 from baselines.common.mpi_moments import mpi_moments
 import baselines.her.experiment.config as config
 from baselines.her.rollout import RolloutWorker
+from tqdm import tqdm
+
 
 def mpi_average(value):
     if not isinstance(value, list):
@@ -21,7 +23,7 @@ def mpi_average(value):
 
 def train(*, policy, rollout_worker, evaluator,
           n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          save_path, demo_file, **kwargs):
+          save_path, demo_file, logdir, **kwargs):
     rank = MPI.COMM_WORLD.Get_rank()
 
     if save_path:
@@ -35,7 +37,7 @@ def train(*, policy, rollout_worker, evaluator,
     if policy.bc_loss == 1: policy.init_demo_buffer(demo_file) #initialize demo buffer if training with demonstrations
 
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
-    for epoch in range(n_epochs):
+    for epoch in tqdm(range(n_epochs)):
         # train
         rollout_worker.clear_history()
         for _ in range(n_cycles):
@@ -81,6 +83,7 @@ def train(*, policy, rollout_worker, evaluator,
         if rank != 0:
             assert local_uniform[0] != root_uniform[0]
 
+    np.savez_compressed(os.path.join(logdir, 'training_buffer.npz'), buf=policy.buffer.buffers)
     return policy
 
 
@@ -174,7 +177,7 @@ def learn(*, network, env, total_timesteps,
         save_path=save_path, policy=policy, rollout_worker=rollout_worker,
         evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
         n_cycles=params['n_cycles'], n_batches=params['n_batches'],
-        policy_save_interval=policy_save_interval, demo_file=demo_file)
+        policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'])
 
 
 @click.command()
