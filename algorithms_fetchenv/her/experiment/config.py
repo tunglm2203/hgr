@@ -2,10 +2,10 @@ import numpy as np
 import gym
 
 import sys
-sys.path.append('../')
+sys.path.insert(0, '../')
+from ddpg import DDPG
 
 from baselines import logger
-from ddpg import DDPG
 from her import make_sample_her_transitions
 
 

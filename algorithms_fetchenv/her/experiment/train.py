@@ -216,10 +216,9 @@ def launch(save_policies=True):
           policy_save_interval=policy_save_interval, save_policies=save_policies, demo_file=demo_file,
           tensorboard=tensorboard)
 
-
+    
 def main():
     launch()
-
 
 if __name__ == '__main__':
     main()

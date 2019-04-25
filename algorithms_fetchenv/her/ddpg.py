@@ -469,6 +469,10 @@ class DDPG(object):
         self._sync_optimizers()
         self._init_target_net()
 
+        # Add ops to save and restore all the variables.
+        train_writer = tf.summary.FileWriter('./model_test_ddpg')
+        train_writer.add_graph(self.sess.graph)
+
     def logs(self, prefix=''):
         logs = []
         logs += [('stats_o/mean', np.mean(self.sess.run([self.o_stats.mean])))]
