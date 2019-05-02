@@ -210,9 +210,9 @@ def main(args):
 
     model, env = train(args, extra_args)
 
-    if args.save_path is not None and rank == 0:
-        save_path = osp.expanduser(args.save_path)
-        model.save(save_path)
+    if extra_args['logdir'] is not None and rank == 0:
+        # save_path = osp.expanduser(args.save_path)
+        model.save(osp.join(extra_args['logdir'], 'save_model.gz'))
 
     if args.play:
         logger.log("Running trained model")

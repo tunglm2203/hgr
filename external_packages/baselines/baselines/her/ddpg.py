@@ -106,6 +106,9 @@ class DDPG(object):
         global DEMO_BUFFER
         DEMO_BUFFER = ReplayBuffer(buffer_shapes, buffer_size, self.T, self.sample_transitions) #initialize the demo buffer; in the same way as the primary data buffer
 
+        # tung: analyze
+        self.log_buf = []
+
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
 
@@ -248,13 +251,24 @@ class DDPG(object):
 
     def _grads(self):
         # Avoid feed_dict here for performance!
-        critic_loss, actor_loss, Q_grad, pi_grad = self.sess.run([
-            self.Q_loss_tf,
-            self.main.Q_pi_tf,
-            self.Q_grad_tf,
-            self.pi_grad_tf
-        ])
-        return critic_loss, actor_loss, Q_grad, pi_grad
+        if self.bc_loss == 1:
+            critic_loss, actor_loss, Q_grad, pi_grad, cloning_loss = self.sess.run([
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+                self.cloning_loss_tf
+            ])
+            return critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad
+        else:
+            critic_loss, actor_loss, Q_grad, pi_grad = self.sess.run([
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+            ])
+            return critic_loss, actor_loss, Q_grad, pi_grad
+
 
     def _update(self, Q_grad, pi_grad):
         self.Q_adam.update(Q_grad, self.Q_lr)
@@ -284,15 +298,23 @@ class DDPG(object):
     def stage_batch(self, batch=None):
         if batch is None:
             batch = self.sample_batch()
+            self.log_buf.append(batch.copy())
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
     def train(self, stage=True):
         if stage:
             self.stage_batch()
-        critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
-        self._update(Q_grad, pi_grad)
-        return critic_loss, actor_loss
+        if self.bc_loss == 1:
+            critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad = self._grads()
+            self._update(Q_grad, pi_grad)
+            return critic_loss, actor_loss, cloning_loss
+        else:
+            critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
+            self._update(Q_grad, pi_grad)
+            return critic_loss, actor_loss
+
+
 
     def _init_target_net(self):
         self.sess.run(self.init_target_net_op)

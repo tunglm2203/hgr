@@ -11,6 +11,9 @@ from baselines.common.mpi_moments import mpi_moments
 import baselines.her.experiment.config as config
 from baselines.her.rollout import RolloutWorker
 from tqdm import tqdm
+import pickle
+from tensorboardX import SummaryWriter
+from my_utils import tensorboard_log
 
 
 def mpi_average(value):
@@ -26,64 +29,105 @@ def train(*, policy, rollout_worker, evaluator,
           save_path, demo_file, logdir, **kwargs):
     rank = MPI.COMM_WORLD.Get_rank()
 
+    tensorboard = SummaryWriter(logdir)
+    save_path = logdir
     if save_path:
         latest_policy_path = os.path.join(save_path, 'policy_latest.pkl')
         best_policy_path = os.path.join(save_path, 'policy_best.pkl')
-        periodic_policy_path = os.path.join(save_path, 'policy_{}.pkl')
+        periodic_policy_path = os.path.join(save_path, 'policy_epoch_{}_cycle_{}.pkl')
 
     logger.info("Training...")
     best_success_rate = -1
+
+    test_buffer = []
 
     if policy.bc_loss == 1: policy.init_demo_buffer(demo_file) #initialize demo buffer if training with demonstrations
 
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
     for epoch in tqdm(range(n_epochs)):
         # train
+        logger.info("[INFO] %s" % logdir)
         rollout_worker.clear_history()
-        for _ in range(n_cycles):
+        total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
+        for cycle_idx in range(n_cycles):
             episode = rollout_worker.generate_rollouts()
             policy.store_episode(episode)
             for _ in range(n_batches):
-                policy.train()
+                if policy.bc_loss:
+                    critic_loss, actor_loss, cloning_loss = policy.train()
+                else:
+                    critic_loss, actor_loss = policy.train()
+                total_q1_loss += critic_loss
+                total_pi_loss += actor_loss
+                if policy.bc_loss:
+                    total_cloning_loss += cloning_loss
+
             policy.update_target_net()
 
-        # test
-        evaluator.clear_history()
-        for _ in range(n_test_rollouts):
-            evaluator.generate_rollouts()
+            # test
+            evaluator.clear_history()
+            test_episode_per_cycle = []
+            for _ in range(n_test_rollouts):
+                test_episode = evaluator.generate_rollouts()
+                test_episode_per_cycle.append(test_episode)
+            test_buffer.append(test_episode_per_cycle)
 
-        # record logs
-        logger.record_tabular('epoch', epoch)
-        for key, val in evaluator.logs('test'):
-            logger.record_tabular(key, mpi_average(val))
-        for key, val in rollout_worker.logs('train'):
-            logger.record_tabular(key, mpi_average(val))
-        for key, val in policy.logs():
-            logger.record_tabular(key, mpi_average(val))
+            # record logs
+            logger.record_tabular('epoch', epoch)
+            log_dict = {}
+            for key, val in evaluator.logs('test'):
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            for key, val in rollout_worker.logs('train'):
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            for key, val in policy.logs():
+                logger.record_tabular(key, mpi_average(val))
+                log_dict[key] = mpi_average(val)
+            log_dict['q1_loss'] = total_q1_loss / n_batches
+            log_dict['pi_loss'] = total_pi_loss / n_batches
+            if policy.bc_loss:
+                log_dict['cloning_loss'] = total_cloning_loss / n_batches
+            if rank == 0:
+                logger.dump_tabular()
 
-        if rank == 0:
-            logger.dump_tabular()
+            # tensorboard_log(tensorboard, log_dict, epoch)
+            tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
 
-        # save the policy if it's better than the previous ones
-        success_rate = mpi_average(evaluator.current_success_rate())
-        if rank == 0 and success_rate >= best_success_rate and save_path:
-            best_success_rate = success_rate
-            logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
-            evaluator.save_policy(best_policy_path)
-            evaluator.save_policy(latest_policy_path)
-        if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_path:
-            policy_path = periodic_policy_path.format(epoch)
-            logger.info('Saving periodic policy to {} ...'.format(policy_path))
-            evaluator.save_policy(policy_path)
+            # save the policy if it's better than the previous ones
+            success_rate = mpi_average(evaluator.current_success_rate())
+            if rank == 0 and success_rate >= best_success_rate and save_path:
+                best_success_rate = success_rate
+                logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
+                evaluator.save_policy(best_policy_path)
+                evaluator.save_policy(latest_policy_path)
+            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_path:
+                policy_path = periodic_policy_path.format(epoch, cycle_idx)
+                logger.info('Saving periodic policy to {} ...'.format(policy_path))
+                evaluator.save_policy(policy_path)
 
-        # make sure that different threads have different seeds
-        local_uniform = np.random.uniform(size=(1,))
-        root_uniform = local_uniform.copy()
-        MPI.COMM_WORLD.Bcast(root_uniform, root=0)
-        if rank != 0:
-            assert local_uniform[0] != root_uniform[0]
+            # make sure that different threads have different seeds
+            local_uniform = np.random.uniform(size=(1,))
+            root_uniform = local_uniform.copy()
+            MPI.COMM_WORLD.Bcast(root_uniform, root=0)
+            if rank != 0:
+                assert local_uniform[0] != root_uniform[0]
 
-    np.savez_compressed(os.path.join(logdir, 'training_buffer.npz'), buf=policy.buffer.buffers)
+        with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
+            data = {
+                'sample_buf': policy.log_buf
+            }
+            pickle.dump(data, f)
+        f.close()
+        policy.log_buf = []
+
+    with open(os.path.join(logdir, 'training_buffer.pkl'), 'wb') as f:
+        data = {
+            'original_buf': policy.buffer.buffers,
+            'test_buf': test_buffer,
+        }
+        pickle.dump(data, f)
+    f.close()
     return policy
 
 
