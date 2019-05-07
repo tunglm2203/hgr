@@ -27,3 +27,4 @@ algorithms_fetchenv/imitatation_learning/data
 *.eot
 *.rst
 external_packages/spinningup
+external_packages/gym
