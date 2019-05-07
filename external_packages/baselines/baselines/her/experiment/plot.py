@@ -54,7 +54,7 @@ def pad(xs, value=np.nan):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('dir', type=str)
+parser.add_argument('--dir', type=str)
 parser.add_argument('--smooth', type=int, default=1)
 args = parser.parse_args()
 
@@ -68,12 +68,12 @@ for curr_path in paths:
     if not results:
         print('skipping {}'.format(curr_path))
         continue
-    print('loading {} ({})'.format(curr_path, len(results['epoch'])))
+    print('loading {} ({})'.format(curr_path, len(results['time_step'])))
     with open(os.path.join(curr_path, 'params.json'), 'r') as f:
         params = json.load(f)
 
     success_rate = np.array(results['test/success_rate'])
-    epoch = np.array(results['epoch']) + 1
+    epoch = np.array(results['time_step']) + 1
     env_id = params['env_name']
     replay_strategy = params['replay_strategy']
 
@@ -118,3 +118,5 @@ for env_id in sorted(data.keys()):
     plt.ylabel('Median Success Rate')
     plt.legend()
     plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
+
+plt.show()
