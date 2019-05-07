@@ -202,7 +202,7 @@ class DDPG(object):
                 episode['o_2'] = episode['o'][:, 1:, :]
                 episode['ag_2'] = episode['ag'][:, 1:, :]
                 num_normalizing_transitions = transitions_in_episode_batch(episode)
-                transitions = self.sample_transitions(episode, num_normalizing_transitions)
+                transitions, _, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
                 o, g, ag = transitions['o'], transitions['g'], transitions['ag']
                 transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
@@ -230,7 +230,7 @@ class DDPG(object):
             episode_batch['o_2'] = episode_batch['o'][:, 1:, :]
             episode_batch['ag_2'] = episode_batch['ag'][:, 1:, :]
             num_normalizing_transitions = transitions_in_episode_batch(episode_batch)
-            transitions = self.sample_transitions(episode_batch, num_normalizing_transitions)
+            transitions, _, _ = self.sample_transitions(episode_batch, num_normalizing_transitions)
 
             o, g, ag = transitions['o'], transitions['g'], transitions['ag']
             transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
@@ -252,22 +252,24 @@ class DDPG(object):
     def _grads(self):
         # Avoid feed_dict here for performance!
         if self.bc_loss == 1:
-            critic_loss, actor_loss, Q_grad, pi_grad, cloning_loss = self.sess.run([
+            td_error, critic_loss, actor_loss, Q_grad, pi_grad, cloning_loss = self.sess.run([
+                self.td_error_tf,
                 self.Q_loss_tf,
                 self.pi_loss_tf,
                 self.Q_grad_tf,
                 self.pi_grad_tf,
                 self.cloning_loss_tf
             ])
-            return critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad
+            return td_error, critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad
         else:
-            critic_loss, actor_loss, Q_grad, pi_grad = self.sess.run([
+            td_error, critic_loss, actor_loss, Q_grad, pi_grad = self.sess.run([
+                self.td_error_tf,
                 self.Q_loss_tf,
                 self.pi_loss_tf,
                 self.Q_grad_tf,
                 self.pi_grad_tf,
             ])
-            return critic_loss, actor_loss, Q_grad, pi_grad
+            return td_error, critic_loss, actor_loss, Q_grad, pi_grad
 
 
     def _update(self, Q_grad, pi_grad):
@@ -276,16 +278,18 @@ class DDPG(object):
 
     def sample_batch(self):
         if self.bc_loss: #use demonstration buffer to sample as well if bc_loss flag is set TRUE
-            transitions = self.buffer.sample(self.batch_size - self.demo_batch_size)
+            transitions, episode_idxs, t_samples = self.buffer.sample(self.batch_size - self.demo_batch_size)
             global DEMO_BUFFER
-            transitions_demo = DEMO_BUFFER.sample(self.demo_batch_size) #sample from the demo buffer
+            transitions_demo, episode_idxs_1, t_samples_1 = DEMO_BUFFER.sample(self.demo_batch_size) #sample from the demo buffer
             for k, values in transitions_demo.items():
                 rolloutV = transitions[k].tolist()
                 for v in values:
                     rolloutV.append(v.tolist())
                 transitions[k] = np.array(rolloutV)
+            episode_idxs = np.concatenate((episode_idxs, episode_idxs_1), axis=0)
+            t_samples = np.concatenate((t_samples, t_samples_1), axis=0)
         else:
-            transitions = self.buffer.sample(self.batch_size) #otherwise only sample from primary buffer
+            transitions, episode_idxs, t_samples = self.buffer.sample(self.batch_size) #otherwise only sample from primary buffer
 
         o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
         ag, ag_2 = transitions['ag'], transitions['ag_2']
@@ -293,12 +297,12 @@ class DDPG(object):
         transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
 
         transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
-        return transitions_batch
+        return transitions_batch, episode_idxs, t_samples
 
     def stage_batch(self, batch=None):
         if batch is None:
-            batch = self.sample_batch()
-            self.log_buf.append(batch.copy())
+            batch, self.episode_idxs, self.t_samples = self.sample_batch()
+            # self.log_buf.append(batch.copy())
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
@@ -306,13 +310,13 @@ class DDPG(object):
         if stage:
             self.stage_batch()
         if self.bc_loss == 1:
-            critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad = self._grads()
+            td_error, critic_loss, actor_loss, cloning_loss, Q_grad, pi_grad = self._grads()
             self._update(Q_grad, pi_grad)
-            return critic_loss, actor_loss, cloning_loss
+            return td_error, critic_loss, actor_loss, cloning_loss
         else:
-            critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
+            td_error, critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
             self._update(Q_grad, pi_grad)
-            return critic_loss, actor_loss
+            return td_error, critic_loss, actor_loss
 
 
 
@@ -378,7 +382,8 @@ class DDPG(object):
         target_Q_pi_tf = self.target.Q_pi_tf
         clip_range = (-self.clip_return, 0. if self.clip_pos_returns else np.inf)
         target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_Q_pi_tf, *clip_range)
-        self.Q_loss_tf = tf.reduce_mean(tf.square(tf.stop_gradient(target_tf) - self.main.Q_tf))
+        self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
+        self.Q_loss_tf = tf.reduce_mean(tf.square(self.td_error_tf))
 
         if self.bc_loss ==1 and self.q_filter == 1 : # train with demonstrations and use bc_loss and q_filter both
             maskMain = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1]) #where is the demonstrator action better than actor action according to the critic? choose those samples only

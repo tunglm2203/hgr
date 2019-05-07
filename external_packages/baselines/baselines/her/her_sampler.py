@@ -58,6 +58,6 @@ def make_sample_her_transitions(replay_strategy, replay_k, reward_fun):
 
         assert(transitions['u'].shape[0] == batch_size_in_transitions)
 
-        return transitions
+        return transitions, episode_idxs, t_samples
 
     return _sample_her_transitions

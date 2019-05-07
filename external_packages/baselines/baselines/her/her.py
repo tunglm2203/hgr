@@ -40,6 +40,10 @@ def train(*, policy, rollout_worker, evaluator,
     best_success_rate = -1
 
     test_buffer = []
+    td_error_log = {
+        'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
+        'td_error': np.zeros((n_epochs * n_cycles, 50, n_epochs * n_cycles * n_batches * 10)),
+    }
 
     if policy.bc_loss == 1: policy.init_demo_buffer(demo_file) #initialize demo buffer if training with demonstrations
 
@@ -54,14 +58,23 @@ def train(*, policy, rollout_worker, evaluator,
             policy.store_episode(episode)
             for _ in range(n_batches):
                 if policy.bc_loss:
-                    critic_loss, actor_loss, cloning_loss = policy.train()
+                    td_error, critic_loss, actor_loss, cloning_loss = policy.train()
                 else:
-                    critic_loss, actor_loss = policy.train()
+                    td_error, critic_loss, actor_loss = policy.train()
+
                 total_q1_loss += critic_loss
                 total_pi_loss += actor_loss
                 if policy.bc_loss:
                     total_cloning_loss += cloning_loss
 
+                # Loop for logging
+                for idx in range(256):  # Need change to variable
+                    td_error_log['td_error'][policy.episode_idxs[idx],
+                                             policy.t_samples[idx],
+                                             td_error_log['freq'][policy.episode_idxs[idx]][policy.t_samples[idx]]] \
+                        = td_error[idx]
+                    td_error_log['freq'][policy.episode_idxs[idx],
+                                         policy.t_samples[idx]] += 1
             policy.update_target_net()
 
             # test
@@ -113,21 +126,20 @@ def train(*, policy, rollout_worker, evaluator,
             if rank != 0:
                 assert local_uniform[0] != root_uniform[0]
 
-        with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
-            data = {
-                'sample_buf': policy.log_buf
-            }
-            pickle.dump(data, f)
-        f.close()
-        policy.log_buf = []
+    #     with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
+    #         data = {
+    #             'sample_buf': policy.log_buf
+    #         }
+    #         pickle.dump(data, f)
+    #     f.close()
+    #     policy.log_buf = []
+    #
+    # with open(os.path.join(logdir, 'td_error_log.pkl'), 'wb') as f:
+    #     pickle.dump(td_error_log, f)
+    # f.close()
+    np.savez_compressed(os.path.join(logdir, 'td_error_log'), freq=td_error_log['freq'],
+                        td_error=td_error_log['td_error'])
 
-    with open(os.path.join(logdir, 'training_buffer.pkl'), 'wb') as f:
-        data = {
-            'original_buf': policy.buffer.buffers,
-            'test_buf': test_buffer,
-        }
-        pickle.dump(data, f)
-    f.close()
     return policy
 
 
