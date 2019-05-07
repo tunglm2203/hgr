@@ -10,6 +10,25 @@ from baselines.bench.monitor import Monitor
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
+        'n_batches': 40,
+        'rollout_batch_size': 1,
+        'batch_size': 256,
+        'n_test_rollouts': 5,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+        'bc_loss': 0,
+        'q_filter': 0,
+    },
+    'FetchPickAndPlace-v1': {
+        'n_cycles': 40,
+        'n_batches': 40,
+        'rollout_batch_size': 1,
+        'batch_size': 256,
+        'n_test_rollouts': 5,
+        'random_eps': 0.1,
+        'noise_eps': 0.1,
+        'bc_loss': 1,
+        'q_filter': 1,
     },
 }
 
