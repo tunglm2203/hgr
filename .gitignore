@@ -28,3 +28,4 @@ algorithms_fetchenv/imitatation_learning/data
 *.rst
 external_packages/spinningup
 external_packages/gym
+external_packages/baselines/baselines/her/hindsight-experience-replay
