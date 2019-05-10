@@ -23,6 +23,7 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
         'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
@@ -41,6 +42,7 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
         'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
     },
 }
 
@@ -51,7 +53,7 @@ DEFAULT_PARAMS = {
     'layers': 3,  # number of layers in the critic/actor networks
     'hidden': 256,  # number of neurons in each hidden layers
     'network_class': 'baselines.her.actor_critic:ActorCritic',
-    'Q_lr': 0.001,  # critic learning rate
+    'q_lr': 0.001,  # critic learning rate
     'pi_lr': 0.001,  # actor learning rate
     'buffer_size': int(1E6),  # for experience replay
     'polyak': 0.95,  # polyak averaging coefficient
@@ -89,6 +91,8 @@ DEFAULT_PARAMS = {
     'prioritized_replay_beta0': 0.4,
     'prioritized_replay_beta_iters': None,
     'prioritized_replay_eps': 1e-6,
+
+    'use_huber_loss': False,
 }
 
 
@@ -100,6 +104,8 @@ def cached_make_env(make_env):
     Only creates a new environment from the provided function if one has not yet already been
     created. This is useful here because we need to infer certain properties of the env, e.g.
     its observation and action spaces, without any intend of actually using it.
+    :param make_env: (function (): Gym Environment) creates the environment
+    :return: (Gym Environment) the created environment
     """
     if make_env not in CACHED_ENVS:
         env = make_env()
@@ -108,44 +114,51 @@ def cached_make_env(make_env):
 
 
 def prepare_params(kwargs):
+    """
+    prepares DDPG params from kwargs
+    :param kwargs: (dict) the input kwargs
+    :return: (dict) DDPG parameters
+    """
     # DDPG params
     ddpg_params = dict()
+
     env_name = kwargs['env_name']
 
     def make_env(subrank=None):
         env = gym.make(env_name)
-        if subrank is not None and logger.get_dir() is not None:
-            try:
-                from mpi4py import MPI
-                mpi_rank = MPI.COMM_WORLD.Get_rank()
-            except ImportError:
-                MPI = None
-                mpi_rank = 0
-                logger.warn('Running with a single MPI process. This should work, but the results may differ from the ones publshed in Plappert et al.')
-
-            max_episode_steps = env._max_episode_steps
-            env =  Monitor(env,
-                           os.path.join(logger.get_dir(), str(mpi_rank) + '.' + str(subrank)),
-                           allow_early_resets=True)
-            # hack to re-expose _max_episode_steps (ideally should replace reliance on it downstream)
-            env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
+        # TODO: clean this code like-stable-baselines
+        # if subrank is not None and logger.get_dir() is not None:
+        #     try:
+        #         from mpi4py import MPI
+        #         mpi_rank = MPI.COMM_WORLD.Get_rank()
+        #     except ImportError:
+        #         MPI = None
+        #         mpi_rank = 0
+        #         logger.warn('Running with a single MPI process. This should work, '
+        #                     'but the results may differ from the ones publshed in Plappert et al.')
+        #
+        #     max_episode_steps = env._max_episode_steps
+        #     env = Monitor(env, os.path.join(logger.get_dir(), str(mpi_rank) + '.' + str(subrank)),
+        #                   allow_early_resets=True)
+        #     # hack to re-expose _max_episode_steps (ideally should replace reliance on it downstream)
+        #     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
         return env
 
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
     assert hasattr(tmp_env, '_max_episode_steps')
-    kwargs['T'] = tmp_env._max_episode_steps
+    kwargs['time_horizon'] = tmp_env._max_episode_steps     # TODO: don't access private variable, access by spec
 
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
-    kwargs['gamma'] = 1. - 1. / kwargs['T']
+    kwargs['gamma'] = 1. - 1. / kwargs['time_horizon']
     if 'lr' in kwargs:
         kwargs['pi_lr'] = kwargs['lr']
-        kwargs['Q_lr'] = kwargs['lr']
+        kwargs['q_lr'] = kwargs['lr']
         del kwargs['lr']
     for name in ['buffer_size', 'hidden', 'layers',
                  'network_class',
                  'polyak',
-                 'batch_size', 'Q_lr', 'pi_lr',
+                 'batch_size', 'q_lr', 'pi_lr',
                  'norm_eps', 'norm_clip', 'max_u',
                  'action_l2', 'clip_obs', 'scope', 'relative_goals']:
         ddpg_params[name] = kwargs[name]
@@ -156,19 +169,30 @@ def prepare_params(kwargs):
     return kwargs
 
 
-def log_params(params, logger=logger):
+def log_params(params, logger_input=logger):
+    """
+        log the parameters
+        :param params: (dict) parameters to log
+        :param logger_input: (logger) the logger
+    """
     for key in sorted(params.keys()):
-        logger.info('{}: {}'.format(key, params[key]))
+        logger_input.info('{}: {}'.format(key, params[key]))
 
 
 def configure_her(params):
+    """
+    configure hindsight experience replay
+    :param params: (dict) input parameters
+    :return: (function (dict, int): dict) returns a HER update function for replay buffer batch
+    """
+
     env = cached_make_env(params['make_env'])
     env.reset()
 
-    def reward_fun(ag_2, g, info):  # vectorized
-        return env.compute_reward(achieved_goal=ag_2, desired_goal=g, info=info)
+    def reward_fun(achieved_goal, desired_goal, info):  # vectorized
+        return env.compute_reward(achieved_goal=achieved_goal, desired_goal=desired_goal, info=info)
 
-    # Prepare configuration for HER.
+    # Prepare configuration for HER
     her_params = {
         'reward_fun': reward_fun,
     }
@@ -185,12 +209,28 @@ def configure_her(params):
     return sample_her_transitions
 
 
-def simple_goal_subtract(a, b):
-    assert a.shape == b.shape
-    return a - b
+def simple_goal_subtract(vec_a, vec_b):
+    """
+    checks if a and b have the same shape, and does a - b
+    :param vec_a: (np.ndarray)
+    :param vec_b: (np.ndarray)
+    :return: (np.ndarray) a - b
+    """
+    assert vec_a.shape == vec_b.shape
+    return vec_a - vec_b
 
 
 def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, clip_return=True):
+    """
+    configure a DDPG model from parameters
+    :param dims: ({str: int}) the dimensions
+    :param params: (dict) the DDPG parameters
+    :param total_timesteps: (int) Number of time step for training, measure in transitions
+    :param reuse: (bool) whether or not the networks should be reused
+    :param use_mpi: (bool) whether or not to use MPI
+    :param clip_return: (float) clip returns to be in [-clip_return, clip_return]
+    :return: (her.DDPG) the ddpg model
+    """
     sample_her_transitions = configure_her(params)
     # Extract relevant parameters.
     gamma = params['gamma']
@@ -203,13 +243,14 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, cli
     env = cached_make_env(params['make_env'])
     env.reset()
     ddpg_params.update({'input_dims': input_dims,  # agent takes an input observations
-                        'T': params['T'],
+                        'time_horizon': params['time_horizon'],
                         'clip_pos_returns': True,  # clip positive returns
                         'clip_return': (1. / (1. - gamma)) if clip_return else np.inf,  # max abs of return
                         'rollout_batch_size': rollout_batch_size,
                         'subtract_goals': simple_goal_subtract,
                         'sample_transitions': sample_her_transitions,
                         'gamma': gamma,
+
                         'bc_loss': params['bc_loss'],
                         'q_filter': params['q_filter'],
                         'num_demo': params['num_demo'],
@@ -222,6 +263,7 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, cli
                         'prioritized_replay_beta_iters': params['prioritized_replay_beta_iters'],
                         'prioritized_replay_eps': params['prioritized_replay_eps'],
                         'total_timesteps': total_timesteps,
+                        'use_huber_loss': params['use_huber_loss'],
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],

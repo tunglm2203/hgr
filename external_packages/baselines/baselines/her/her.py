@@ -29,11 +29,10 @@ def train(policy, rollout_worker, evaluator,
     rank = MPI.COMM_WORLD.Get_rank()
 
     tensorboard = SummaryWriter(logdir)
-    save_path = logdir
-    if save_path:
-        latest_policy_path = os.path.join(save_path, 'policy_latest.pkl')
-        best_policy_path = os.path.join(save_path, 'policy_best.pkl')
-        periodic_policy_path = os.path.join(save_path, 'policy_epoch_{}_cycle_{}.pkl')
+    if logdir:
+        latest_policy_path = os.path.join(logdir, 'policy_latest.pkl')
+        best_policy_path = os.path.join(logdir, 'policy_best.pkl')
+        periodic_policy_path = os.path.join(logdir, 'policy_epoch_{}_cycle_{}.pkl')
 
     logger.info("Training...")
     best_success_rate = -1
@@ -118,15 +117,15 @@ def train(policy, rollout_worker, evaluator,
 
             # save the policy if it's better than the previous ones
             success_rate = mpi_average(evaluator.current_success_rate())
-            if rank == 0 and success_rate >= best_success_rate and save_path:
+            if rank == 0 and success_rate >= best_success_rate and logdir:
                 best_success_rate = success_rate
                 logger.info(
                     'New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
                 evaluator.save_policy(best_policy_path)
-                evaluator.save_policy(latest_policy_path)
-            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_path:
+            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and logdir:
                 policy_path = periodic_policy_path.format(epoch, cycle_idx)
                 logger.info('Saving periodic policy to {} ...'.format(policy_path))
+                evaluator.save_policy(latest_policy_path)
                 evaluator.save_policy(policy_path)
 
             # make sure that different threads have different seeds
@@ -161,6 +160,7 @@ def learn(*, network, env, total_timesteps,
           load_path=None,
           **kwargs):
     override_params = override_params or {}
+    num_cpu = 1
     if MPI is not None:
         rank = MPI.COMM_WORLD.Get_rank()
         num_cpu = MPI.COMM_WORLD.Get_size()
@@ -187,7 +187,7 @@ def learn(*, network, env, total_timesteps,
         params['bc_loss'] = 1
     params.update(kwargs)
 
-    config.log_params(params, logger=logger)
+    config.log_params(params, logger_input=logger)
 
     if num_cpu == 1:
         logger.warn()
@@ -211,7 +211,7 @@ def learn(*, network, env, total_timesteps,
         'use_target_net': False,
         'use_demo_states': True,
         'compute_Q': False,
-        'T': params['T'],
+        'time_horizon': params['time_horizon'],
     }
 
     eval_params = {
@@ -219,10 +219,10 @@ def learn(*, network, env, total_timesteps,
         'use_target_net': params['test_with_polyak'],
         'use_demo_states': False,
         'compute_Q': True,
-        'T': params['T'],
+        'time_horizon': params['time_horizon'],
     }
 
-    for name in ['T', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
+    for name in ['time_horizon', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
         rollout_params[name] = params[name]
         eval_params[name] = params[name]
 
@@ -232,7 +232,7 @@ def learn(*, network, env, total_timesteps,
     evaluator = RolloutWorker(eval_env, policy, dims, logger, **eval_params)
 
     n_cycles = params['n_cycles']
-    n_epochs = total_timesteps // n_cycles // rollout_worker.T // rollout_worker.rollout_batch_size
+    n_epochs = total_timesteps // n_cycles // rollout_worker.time_horizon // rollout_worker.rollout_batch_size
 
     return train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
                  n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
@@ -246,11 +246,9 @@ def learn(*, network, env, total_timesteps,
 @click.option('--env', type=str, default='FetchReach-v1', help='the name of the Gym environment')
 @click.option('--total_timesteps', type=int, default=int(5e5), help='the number of timesteps to run')
 @click.option('--seed', type=int, default=0, help='seed both the environment and the training code')
-@click.option('--policy_save_interval', type=int, default=5, help='the interval which policy pickles are saved. '
-                                                                  'If set to 0, only the best and latest policy will '
-                                                                  'be pickled.')
-@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future',
-              help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
+@click.option('--policy_save_interval', type=int, default=5, help='If 0, only the best and latest policy be pickled')
+@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='"future" uses HER, '
+                                                                                                 '"none" disables HER.')
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
 @click.option('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='demo data file path')
 def main(**kwargs):

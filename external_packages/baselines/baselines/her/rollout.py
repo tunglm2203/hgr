@@ -3,14 +3,12 @@ from collections import deque
 import numpy as np
 import pickle
 
-from baselines.her.util import convert_episode_to_batch_major, store_args
+from baselines.her.util import convert_episode_to_batch_major
 
 
 class RolloutWorker:
-
-    @store_args
-    def __init__(self, venv, policy, dims, logger, T, rollout_batch_size=1,
-                 exploit=False, use_target_net=False, compute_Q=False, noise_eps=0,
+    def __init__(self, env, policy, dims, logger, time_horizon, rollout_batch_size=1,
+                 exploit=False, use_target_net=False, compute_q=False, noise_eps=0,
                  random_eps=0, history_len=100, render=False, monitor=False, **kwargs):
         """Rollout worker generates experience by interacting with one or many environments.
 
@@ -30,8 +28,28 @@ class RolloutWorker:
             history_len (int): length of history for statistics smoothing
             render (boolean): whether or not to render the rollouts
         """
+        self.env = env
+        self.policy = policy
+        self.dims = dims
+        self.logger = logger
+        self.time_horizon = time_horizon
+        self.rollout_batch_size = rollout_batch_size
+        self.exploit = exploit
+        self.use_target_net = use_target_net
+        self.compute_q = compute_q
+        self.noise_eps = noise_eps
+        self.random_eps = random_eps
+        self.history_len = history_len
+        self.render = render
+        self.monitor = monitor
 
-        assert self.T > 0
+        assert self.time_horizon > 0
+
+        # First time reset to allocate variables
+        self.obs_dict = self.env.reset()
+        self.initial_o = self.obs_dict['observation']
+        self.initial_ag = self.obs_dict['achieved_goal']
+        self.g = self.obs_dict['desired_goal']
 
         self.info_keys = [key.replace('info_', '') for key in dims.keys() if key.startswith('info_')]
 
@@ -43,7 +61,7 @@ class RolloutWorker:
         self.clear_history()
 
     def reset_all_rollouts(self):
-        self.obs_dict = self.venv.reset()
+        self.obs_dict = self.env.reset()
         self.initial_o = self.obs_dict['observation']
         self.initial_ag = self.obs_dict['achieved_goal']
         self.g = self.obs_dict['desired_goal']
@@ -63,17 +81,17 @@ class RolloutWorker:
         # generate episodes
         obs, achieved_goals, acts, goals, successes = [], [], [], [], []
         dones = []
-        info_values = [np.empty((self.T - 1, self.rollout_batch_size, self.dims['info_' + key]), np.float32) for key in self.info_keys]
+        info_values = [np.empty((self.time_horizon - 1, self.rollout_batch_size, self.dims['info_' + key]), np.float32) for key in self.info_keys]
         Qs = []
-        for t in range(self.T):
+        for t in range(self.time_horizon):
             policy_output = self.policy.get_actions(
                 o, ag, self.g,
-                compute_Q=self.compute_Q,
+                compute_q=self.compute_q,
                 noise_eps=self.noise_eps if not self.exploit else 0.,
                 random_eps=self.random_eps if not self.exploit else 0.,
                 use_target_net=self.use_target_net)
 
-            if self.compute_Q:
+            if self.compute_q:
                 u, Q = policy_output
                 Qs.append(Q)
             else:
@@ -87,7 +105,7 @@ class RolloutWorker:
             ag_new = np.empty((self.rollout_batch_size, self.dims['g']))
             success = np.zeros(self.rollout_batch_size)
             # compute new states and observations
-            obs_dict_new, _, done, info = self.venv.step(u)
+            obs_dict_new, _, done, info = self.env.step(u)
             o_new = obs_dict_new['observation']
             ag_new = obs_dict_new['achieved_goal']
             success = np.array([i.get('is_success', 0.0) for i in info])
@@ -130,7 +148,7 @@ class RolloutWorker:
         assert successful.shape == (self.rollout_batch_size,)
         success_rate = np.mean(successful)
         self.success_history.append(success_rate)
-        if self.compute_Q:
+        if self.compute_q:
             self.Q_history.append(np.mean(Qs))
         self.n_episodes += self.rollout_batch_size
 
@@ -159,7 +177,7 @@ class RolloutWorker:
         """
         logs = []
         logs += [('success_rate', np.mean(self.success_history))]
-        if self.compute_Q:
+        if self.compute_q:
             logs += [('mean_Q', np.mean(self.Q_history))]
         logs += [('episode', self.n_episodes)]
 

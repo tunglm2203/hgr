@@ -37,7 +37,7 @@ class ReplayBuffer:
         with self.lock:
             return self.current_size == self.size_in_episodes
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, beta=0.):
         """Returns a dict {key: array(batch_size x shapes[key])}
         """
         buffers = {}
@@ -200,7 +200,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Re-compute reward since we may have substituted the goal.
         reward_params = {k: transitions[k] for k in ['ag_2', 'g']}
         reward_params['info'] = info
-        transitions['r'] = self.reward_fun(**reward_params)
+        transitions['r'] = self.reward_fun(achieved_goal=reward_params['ag_2'],
+                                           desired_goal=reward_params['g'],
+                                           info=reward_params['info'])
 
         transitions = {k: transitions[k].reshape(batch_size, *transitions[k].shape[1:])
                        for k in transitions.keys()}
@@ -209,7 +211,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         return transitions, [episode_idxs, t_samples]
 
-    def sample(self, batch_size, beta):
+    def sample(self, batch_size, beta=0.):
         """
         Returns:
              A dict {key: array(batch_size x shapes[key])}
