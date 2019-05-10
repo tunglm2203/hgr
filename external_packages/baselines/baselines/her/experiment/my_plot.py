@@ -126,7 +126,9 @@ for i in range(len(collect_data)):
         plt.xlabel('Epoch')
         plt.ylabel('Median Success Rate')
 
-plt.legend([directory[0].split('/')[-1], directory[1].split('/')[-1], directory[2].split('/')[-1]])
+# plt.legend([directory[0].split('/')[-1], directory[1].split('/')[-1], directory[2].split('/')[-1]])
+legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
+plt.legend(legend_name)
 
 plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
 plt.show()
