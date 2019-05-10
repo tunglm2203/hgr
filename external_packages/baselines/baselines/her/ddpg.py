@@ -8,16 +8,15 @@ from baselines import logger
 from baselines.her.util import (
     import_function, store_args, flatten_grads, transitions_in_episode_batch, convert_episode_to_batch_major)
 from baselines.her.normalizer import Normalizer
-from baselines.her.replay_buffer import ReplayBuffer
+from baselines.her.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common import tf_util
+from baselines.common.schedules import LinearSchedule
 
 
 def dims_to_shapes(input_dims):
     return {key: tuple([val]) if val > 0 else tuple() for key, val in input_dims.items()}
 
-
-global DEMO_BUFFER #buffer for demonstrations
 
 class DDPG(object):
     @store_args
@@ -25,7 +24,7 @@ class DDPG(object):
                  Q_lr, pi_lr, norm_eps, norm_clip, max_u, action_l2, clip_obs, scope, T,
                  rollout_batch_size, subtract_goals, relative_goals, clip_pos_returns, clip_return,
                  bc_loss, q_filter, num_demo, demo_batch_size, prm_loss_weight, aux_loss_weight,
-                 sample_transitions, gamma, reuse=False, **kwargs):
+                 sample_transitions, gamma, use_per, reuse=False, **kwargs):
         """Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
             Added functionality to use demonstrations for training to Overcome exploration problem.
 
@@ -81,6 +80,7 @@ class DDPG(object):
         for key in ['o', 'g']:
             stage_shapes[key + '_2'] = stage_shapes[key]
         stage_shapes['r'] = (None,)
+        stage_shapes['important_weight'] = (None,)
         self.stage_shapes = stage_shapes
 
         # Create network.
@@ -90,6 +90,7 @@ class DDPG(object):
                 shapes=list(self.stage_shapes.values()))
             self.buffer_ph_tf = [
                 tf.placeholder(tf.float32, shape=shape) for shape in self.stage_shapes.values()]
+
             self.stage_op = self.staging_tf.put(self.buffer_ph_tf)
 
             self._create_network(reuse=reuse)
@@ -100,14 +101,51 @@ class DDPG(object):
         buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
         buffer_shapes['ag'] = (self.T, self.dimg)
 
-        buffer_size = (self.buffer_size // self.rollout_batch_size) * self.rollout_batch_size
-        self.buffer = ReplayBuffer(buffer_shapes, buffer_size, self.T, self.sample_transitions)
+        # buffer_size = (self.buffer_size // self.rollout_batch_size) * self.rollout_batch_size
+        if self.use_per:
+            # tung: Variables need to merge into interface
+            self.prioritized_replay_alpha = 0.6
+            self.prioritized_replay_beta0 = 0.4
+            self.prioritized_replay_beta_iters = None
+            self.prioritized_replay_eps = 1e-6
+            total_timesteps = 5000
+            # exploration_fraction = 0.1
+            # exploration_final_eps = 0.02
+            self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.T,
+                                                  alpha=self.prioritized_replay_alpha,
+                                                  replay_strategy=self.sample_transitions['replay_strategy'],
+                                                  replay_k=self.sample_transitions['replay_k'],
+                                                  reward_fun=self.sample_transitions['reward_fun'])
+            if self.prioritized_replay_beta_iters is None:
+                self.prioritized_replay_beta_iters = total_timesteps
+            beta_schedule = LinearSchedule(schedule_timesteps=self.prioritized_replay_beta_iters,
+                                           initial_p=self.prioritized_replay_beta0,
+                                           final_p=1.0)
+            # Create the schedule for exploration starting from 1.
+            # exploration = LinearSchedule(schedule_timesteps=int(exploration_fraction * total_timesteps),
+            #                              initial_p=1.0,
+            #                              final_p=exploration_final_eps)
+        else:
+            self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.T, self.sample_transitions)
 
-        global DEMO_BUFFER
-        DEMO_BUFFER = ReplayBuffer(buffer_shapes, buffer_size, self.T, self.sample_transitions) #initialize the demo buffer; in the same way as the primary data buffer
+        if self.bc_loss:
+            if self.use_per:
+                self.demo_buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.T,
+                                                           alpha=self.prioritized_replay_alpha,
+                                                           replay_strategy=self.sample_transitions['replay_strategy'],
+                                                           replay_k=self.sample_transitions['replay_k'],
+                                                           reward_fun=self.sample_transitions['reward_fun']
+                                                           )
+                if self.prioritized_replay_beta_iters is None:
+                    prioritized_replay_beta_iters = total_timesteps
+            else:
+                self.demo_buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.T, self.sample_transitions) #initialize the demo buffer; in the same way as the primary data buffer
 
-        # tung: analyze
-        self.log_buf = []
+        self.episode_idxs = np.zeros(self.batch_size, dtype=np.int64)
+        self.t_samples = np.zeros(self.batch_size, dtype=np.int64)
+        self.important_weight_idxes = None
+        # # tung: analyze
+        # self.log_buf = []
 
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
@@ -126,7 +164,6 @@ class DDPG(object):
     def step(self, obs):
         actions = self.get_actions(obs['observation'], obs['achieved_goal'], obs['desired_goal'])
         return actions, None, None, None
-
 
     def get_actions(self, o, ag, g, noise_eps=0., random_eps=0., use_target_net=False,
                     compute_Q=False):
@@ -193,16 +230,15 @@ class DDPG(object):
                 episode['info_{}'.format(key)] = value
 
             episode = convert_episode_to_batch_major(episode)
-            global DEMO_BUFFER
-            DEMO_BUFFER.store_episode(episode) # create the observation dict and append them into the demonstration buffer
-            logger.debug("Demo buffer size currently ", DEMO_BUFFER.get_current_size()) #print out the demonstration buffer size
+            self.demo_buffer.store_episode(episode) # create the observation dict and append them into the demonstration buffer
+            logger.debug("Demo buffer size currently ", self.demo_buffer.get_current_size()) #print out the demonstration buffer size
 
             if update_stats:
                 # add transitions to normalizer to normalize the demo data as well
                 episode['o_2'] = episode['o'][:, 1:, :]
                 episode['ag_2'] = episode['ag'][:, 1:, :]
                 num_normalizing_transitions = transitions_in_episode_batch(episode)
-                transitions, _, _ = self.sample_transitions(episode, num_normalizing_transitions)
+                transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
                 o, g, ag = transitions['o'], transitions['g'], transitions['ag']
                 transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
@@ -215,7 +251,7 @@ class DDPG(object):
                 self.g_stats.recompute_stats()
             episode.clear()
 
-        logger.info("Demo buffer size: ", DEMO_BUFFER.get_current_size()) #print out the demonstration buffer size
+        logger.info("Demo buffer size: ", self.demo_buffer.get_current_size()) #print out the demonstration buffer size
 
     def store_episode(self, episode_batch, update_stats=True):
         """
@@ -230,7 +266,10 @@ class DDPG(object):
             episode_batch['o_2'] = episode_batch['o'][:, 1:, :]
             episode_batch['ag_2'] = episode_batch['ag'][:, 1:, :]
             num_normalizing_transitions = transitions_in_episode_batch(episode_batch)
-            transitions, _, _ = self.sample_transitions(episode_batch, num_normalizing_transitions)
+            if self.use_per:
+                transitions, _ = self.buffer.sample_uniformly(episode_batch, num_normalizing_transitions)
+            else:
+                transitions, _ = self.sample_transitions(episode_batch, num_normalizing_transitions)
 
             o, g, ag = transitions['o'], transitions['g'], transitions['ag']
             transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
@@ -271,7 +310,6 @@ class DDPG(object):
             ])
             return td_error, critic_loss, actor_loss, Q_grad, pi_grad
 
-
     def _update(self, Q_grad, pi_grad):
         self.Q_adam.update(Q_grad, self.Q_lr)
         self.pi_adam.update(pi_grad, self.pi_lr)
@@ -279,8 +317,7 @@ class DDPG(object):
     def sample_batch(self):
         if self.bc_loss: #use demonstration buffer to sample as well if bc_loss flag is set TRUE
             transitions, episode_idxs, t_samples = self.buffer.sample(self.batch_size - self.demo_batch_size)
-            global DEMO_BUFFER
-            transitions_demo, episode_idxs_1, t_samples_1 = DEMO_BUFFER.sample(self.demo_batch_size) #sample from the demo buffer
+            transitions_demo, episode_idxs_1, t_samples_1 = self.demo_buffer.sample(self.demo_batch_size)
             for k, values in transitions_demo.items():
                 rolloutV = transitions[k].tolist()
                 for v in values:
@@ -289,19 +326,33 @@ class DDPG(object):
             episode_idxs = np.concatenate((episode_idxs, episode_idxs_1), axis=0)
             t_samples = np.concatenate((t_samples, t_samples_1), axis=0)
         else:
-            transitions, episode_idxs, t_samples = self.buffer.sample(self.batch_size) #otherwise only sample from primary buffer
+            if self.use_per:
+                transitions, [episode_idxs, t_samples, weights, idxes] = self.buffer.sample(self.batch_size, beta=0.5)
+            else:
+                transitions, [episode_idxs, t_samples] = self.buffer.sample(self.batch_size)
 
         o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
         ag, ag_2 = transitions['ag'], transitions['ag_2']
         transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
         transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
 
+        if self.use_per:
+            transitions['important_weight'] = weights
+        else:
+            transitions['important_weight'] = np.ones(self.batch_size)
+
         transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
-        return transitions_batch, episode_idxs, t_samples
+        if self.use_per:
+            return transitions_batch, [episode_idxs, t_samples, idxes]
+        else:
+            return transitions_batch, [episode_idxs, t_samples]
 
     def stage_batch(self, batch=None):
         if batch is None:
-            batch, self.episode_idxs, self.t_samples = self.sample_batch()
+            batch, additional_info = self.sample_batch()
+            self.episode_idxs, self.t_samples = additional_info[0], additional_info[1]
+            if self.use_per:
+                self.important_weight_idxes = additional_info[2]
             # self.log_buf.append(batch.copy())
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
@@ -317,8 +368,6 @@ class DDPG(object):
             td_error, critic_loss, actor_loss, Q_grad, pi_grad = self._grads()
             self._update(Q_grad, pi_grad)
             return td_error, critic_loss, actor_loss
-
-
 
     def _init_target_net(self):
         self.sess.run(self.init_target_net_op)
@@ -357,6 +406,7 @@ class DDPG(object):
         batch_tf = OrderedDict([(key, batch[i])
                                 for i, key in enumerate(self.stage_shapes.keys())])
         batch_tf['r'] = tf.reshape(batch_tf['r'], [-1, 1])
+        batch_tf['important_weight'] = tf.reshape(batch_tf['important_weight'], [-1, 1])
 
         #choose only the demo buffer samples
         mask = np.concatenate((np.zeros(self.batch_size - self.demo_batch_size), np.ones(self.demo_batch_size)), axis = 0)
@@ -383,7 +433,11 @@ class DDPG(object):
         clip_range = (-self.clip_return, 0. if self.clip_pos_returns else np.inf)
         target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_Q_pi_tf, *clip_range)
         self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
-        self.Q_loss_tf = tf.reduce_mean(tf.square(self.td_error_tf))
+        if self.use_per:
+            # tung: Change MSE to Huber loss
+            self.Q_loss_tf = tf.reduce_mean(tf.square(self.td_error_tf) * batch_tf['important_weight'])
+        else:
+            self.Q_loss_tf = tf.reduce_mean(tf.square(self.td_error_tf))
 
         if self.bc_loss ==1 and self.q_filter == 1 : # train with demonstrations and use bc_loss and q_filter both
             maskMain = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1]) #where is the demonstrator action better than actor action according to the critic? choose those samples only

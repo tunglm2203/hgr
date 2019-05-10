@@ -17,16 +17,18 @@ from my_utils import tensorboard_log
 
 
 def mpi_average(value):
+    if value == []:
+        value = [0.]
     if not isinstance(value, list):
         value = [value]
-    if not any(value):
-        value = [0.]
+    # if not any(value):
+    #     value = [0.]
     return mpi_moments(np.array(value))[0]
 
 
 def train(*, policy, rollout_worker, evaluator,
           n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          save_path, demo_file, logdir, **kwargs):
+          demo_file, logdir, use_per, **kwargs):
     rank = MPI.COMM_WORLD.Get_rank()
 
     tensorboard = SummaryWriter(logdir)
@@ -39,7 +41,6 @@ def train(*, policy, rollout_worker, evaluator,
     logger.info("Training...")
     best_success_rate = -1
 
-    test_buffer = []
     td_error_log = {
         'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
         'td_error': np.zeros((n_epochs * n_cycles, 50, n_epochs * n_cycles * n_batches * 10)),
@@ -58,9 +59,12 @@ def train(*, policy, rollout_worker, evaluator,
             policy.store_episode(episode)
             for _ in range(n_batches):
                 if policy.bc_loss:
-                    td_error, critic_loss, actor_loss, cloning_loss = policy.train()
+                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train()
                 else:
-                    td_error, critic_loss, actor_loss = policy.train()
+                    td_errors, critic_loss, actor_loss = policy.train()
+                if use_per:
+                    new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
+                    policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
 
                 total_q1_loss += critic_loss
                 total_pi_loss += actor_loss
@@ -72,18 +76,15 @@ def train(*, policy, rollout_worker, evaluator,
                     td_error_log['td_error'][policy.episode_idxs[idx],
                                              policy.t_samples[idx],
                                              td_error_log['freq'][policy.episode_idxs[idx]][policy.t_samples[idx]]] \
-                        = td_error[idx]
+                        = td_errors[idx]
                     td_error_log['freq'][policy.episode_idxs[idx],
                                          policy.t_samples[idx]] += 1
             policy.update_target_net()
 
             # test
             evaluator.clear_history()
-            test_episode_per_cycle = []
             for _ in range(n_test_rollouts):
-                test_episode = evaluator.generate_rollouts()
-                test_episode_per_cycle.append(test_episode)
-            test_buffer.append(test_episode_per_cycle)
+                evaluator.generate_rollouts()
 
             # record logs
             logger.record_tabular('epoch', epoch)
@@ -126,17 +127,14 @@ def train(*, policy, rollout_worker, evaluator,
             if rank != 0:
                 assert local_uniform[0] != root_uniform[0]
 
-    #     with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
-    #         data = {
-    #             'sample_buf': policy.log_buf
-    #         }
-    #         pickle.dump(data, f)
-    #     f.close()
-    #     policy.log_buf = []
-    #
-    # with open(os.path.join(logdir, 'td_error_log.pkl'), 'wb') as f:
-    #     pickle.dump(td_error_log, f)
-    # f.close()
+        # with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
+        #     data = {
+        #         'sample_buf': policy.log_buf
+        #     }
+        #     pickle.dump(data, f)
+        # f.close()
+        # policy.log_buf = []
+
     np.savez_compressed(os.path.join(logdir, 'td_error_log'), freq=td_error_log['freq'],
                         td_error=td_error_log['td_error'])
 
@@ -172,9 +170,10 @@ def learn(*, network, env, total_timesteps,
     params['replay_strategy'] = replay_strategy
     if env_name in config.DEFAULT_ENV_PARAMS:
         params.update(config.DEFAULT_ENV_PARAMS[env_name])  # merge env-specific parameters in
+
     params.update(**override_params)  # makes it possible to override any parameter
     with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
-         json.dump(params, f)
+        json.dump(params, f)
     params = config.prepare_params(params)
     params['rollout_batch_size'] = env.num_envs
 
@@ -230,10 +229,12 @@ def learn(*, network, env, total_timesteps,
     n_epochs = total_timesteps // n_cycles // rollout_worker.T // rollout_worker.rollout_batch_size
 
     return train(
-        save_path=save_path, policy=policy, rollout_worker=rollout_worker,
-        evaluator=evaluator, n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
+        policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
+        n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
         n_cycles=params['n_cycles'], n_batches=params['n_batches'],
-        policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'])
+        policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'],
+        use_per=params['use_per']
+    )
 
 
 @click.command()

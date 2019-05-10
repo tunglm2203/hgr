@@ -9,15 +9,16 @@ from baselines.bench.monitor import Monitor
 
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
-        'n_cycles': 10,
+        'n_cycles': 1,
         'n_batches': 40,
-        'rollout_batch_size': 1,
+        'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.3,
         'noise_eps': 0.2,
         'bc_loss': 0,
         'q_filter': 0,
+        'use_per': True,
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
@@ -29,6 +30,9 @@ DEFAULT_ENV_PARAMS = {
         'noise_eps': 0.1,
         'bc_loss': 1,
         'q_filter': 1,
+        'prm_loss_weight': 0.001,
+        'aux_loss_weight':  0.0078,
+        'use_per': False,
     },
 }
 
@@ -71,6 +75,7 @@ DEFAULT_PARAMS = {
     'demo_batch_size': 128, #number of samples to be used from the demonstrations buffer, per mpi thread 128/1024 or 32/256
     'prm_loss_weight': 0.001, #Weight corresponding to the primary loss
     'aux_loss_weight':  0.0078, #Weight corresponding to the auxilliary loss also called the cloning loss
+    'use_per': False,
 }
 
 
@@ -158,7 +163,11 @@ def configure_her(params):
         her_params[name] = params[name]
         params['_' + name] = her_params[name]
         del params[name]
-    sample_her_transitions = make_sample_her_transitions(**her_params)
+
+    if params['use_per']:
+        sample_her_transitions = her_params
+    else:
+        sample_her_transitions = make_sample_her_transitions(**her_params)
 
     return sample_her_transitions
 
@@ -194,6 +203,7 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
                         'demo_batch_size': params['demo_batch_size'],
                         'prm_loss_weight': params['prm_loss_weight'],
                         'aux_loss_weight': params['aux_loss_weight'],
+                        'use_per': params['use_per']
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],
