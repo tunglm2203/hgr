@@ -11,7 +11,6 @@ from baselines.common.mpi_moments import mpi_moments
 import baselines.her.experiment.config as config
 from baselines.her.rollout import RolloutWorker
 from tqdm import tqdm
-import pickle
 from tensorboardX import SummaryWriter
 from my_utils import tensorboard_log
 
@@ -21,14 +20,12 @@ def mpi_average(value):
         value = [0.]
     if not isinstance(value, list):
         value = [value]
-    # if not any(value):
-    #     value = [0.]
     return mpi_moments(np.array(value))[0]
 
 
-def train(*, policy, rollout_worker, evaluator,
+def train(policy, rollout_worker, evaluator,
           n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          demo_file, logdir, use_per, **kwargs):
+          demo_file, logdir, use_per):
     rank = MPI.COMM_WORLD.Get_rank()
 
     tensorboard = SummaryWriter(logdir)
@@ -41,12 +38,13 @@ def train(*, policy, rollout_worker, evaluator,
     logger.info("Training...")
     best_success_rate = -1
 
-    td_error_log = {
-        'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
-        'td_error': np.zeros((n_epochs * n_cycles, 50, n_epochs * n_cycles * n_batches * 10)),
-    }
+    # td_error_log = {
+    #     'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
+    #     'td_error': np.zeros((n_epochs * n_cycles, 50, n_epochs * n_cycles * n_batches * 10)),
+    # }
 
-    if policy.bc_loss == 1: policy.init_demo_buffer(demo_file) #initialize demo buffer if training with demonstrations
+    if policy.bc_loss == 1:
+        policy.init_demo_buffer(demo_file)  # initialize demo buffer if training with demonstrations
 
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
     for epoch in tqdm(range(n_epochs)):
@@ -59,26 +57,35 @@ def train(*, policy, rollout_worker, evaluator,
             policy.store_episode(episode)
             for _ in range(n_batches):
                 if policy.bc_loss:
-                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train()
+                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=policy.buffer.get_current_size())
                 else:
-                    td_errors, critic_loss, actor_loss = policy.train()
+                    td_errors, critic_loss, actor_loss = policy.train(time_step=policy.buffer.get_current_size())
+
                 if use_per:
-                    new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
-                    policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
+                    if policy.bc_loss:
+                        new_priorities = np.abs(td_errors[:policy.batch_size - policy.demo_batch_size]) + \
+                                         policy.prioritized_replay_eps
+                        new_priorities_for_bc = np.abs(td_errors[policy.demo_batch_size:]) + \
+                                                policy.prioritized_replay_eps
+                        policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
+                        policy.demo_buffer.update_priorities(policy.important_weight_idxes_for_bc, new_priorities_for_bc)
+                    else:
+                        new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
+                        policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
 
                 total_q1_loss += critic_loss
                 total_pi_loss += actor_loss
                 if policy.bc_loss:
                     total_cloning_loss += cloning_loss
 
-                # Loop for logging
-                for idx in range(256):  # Need change to variable
-                    td_error_log['td_error'][policy.episode_idxs[idx],
-                                             policy.t_samples[idx],
-                                             td_error_log['freq'][policy.episode_idxs[idx]][policy.t_samples[idx]]] \
-                        = td_errors[idx]
-                    td_error_log['freq'][policy.episode_idxs[idx],
-                                         policy.t_samples[idx]] += 1
+                # # Loop for logging
+                # for idx in range(256):  # Need change to variable
+                #     td_error_log['td_error'][policy.episode_idxs[idx],
+                #                              policy.t_samples[idx],
+                #                              td_error_log['freq'][policy.episode_idxs[idx]][policy.t_samples[idx]]] \
+                #         = td_errors[idx]
+                #     td_error_log['freq'][policy.episode_idxs[idx],
+                #                          policy.t_samples[idx]] += 1
             policy.update_target_net()
 
             # test
@@ -87,7 +94,8 @@ def train(*, policy, rollout_worker, evaluator,
                 evaluator.generate_rollouts()
 
             # record logs
-            logger.record_tabular('epoch', epoch)
+            # logger.record_tabular('time_step', epoch)
+            logger.record_tabular('time_step', policy.buffer.n_transitions_stored)
             log_dict = {}
             for key, val in evaluator.logs('test'):
                 logger.record_tabular(key, mpi_average(val))
@@ -112,7 +120,8 @@ def train(*, policy, rollout_worker, evaluator,
             success_rate = mpi_average(evaluator.current_success_rate())
             if rank == 0 and success_rate >= best_success_rate and save_path:
                 best_success_rate = success_rate
-                logger.info('New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
+                logger.info(
+                    'New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
                 evaluator.save_policy(best_policy_path)
                 evaluator.save_policy(latest_policy_path)
             if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and save_path:
@@ -135,25 +144,22 @@ def train(*, policy, rollout_worker, evaluator,
         # f.close()
         # policy.log_buf = []
 
-    np.savez_compressed(os.path.join(logdir, 'td_error_log'), freq=td_error_log['freq'],
-                        td_error=td_error_log['td_error'])
+    # np.savez_compressed(os.path.join(logdir, 'td_error_log'), freq=td_error_log['freq'],
+    #                     td_error=td_error_log['td_error'])
 
     return policy
 
 
 def learn(*, network, env, total_timesteps,
-    seed=None,
-    eval_env=None,
-    replay_strategy='future',
-    policy_save_interval=5,
-    clip_return=True,
-    demo_file=None,
-    override_params=None,
-    load_path=None,
-    save_path=None,
-    **kwargs
-):
-
+          seed=None,
+          eval_env=None,
+          replay_strategy='future',
+          policy_save_interval=5,
+          clip_return=True,
+          demo_file=None,
+          override_params=None,
+          load_path=None,
+          **kwargs):
     override_params = override_params or {}
     if MPI is not None:
         rank = MPI.COMM_WORLD.Get_rank()
@@ -196,7 +202,7 @@ def learn(*, network, env, total_timesteps,
         logger.warn()
 
     dims = config.configure_dims(params)
-    policy = config.configure_ddpg(dims=dims, params=params, clip_return=clip_return)
+    policy = config.configure_ddpg(dims=dims, params=params, clip_return=clip_return, total_timesteps=total_timesteps)
     if load_path is not None:
         tf_util.load_variables(load_path)
 
@@ -228,23 +234,25 @@ def learn(*, network, env, total_timesteps,
     n_cycles = params['n_cycles']
     n_epochs = total_timesteps // n_cycles // rollout_worker.T // rollout_worker.rollout_batch_size
 
-    return train(
-        policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
-        n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
-        n_cycles=params['n_cycles'], n_batches=params['n_batches'],
-        policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'],
-        use_per=params['use_per']
-    )
+    return train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
+                 n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
+                 n_cycles=params['n_cycles'], n_batches=params['n_batches'],
+                 policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'],
+                 use_per=params['use_per']
+                 )
 
 
 @click.command()
-@click.option('--env', type=str, default='FetchReach-v1', help='the name of the OpenAI Gym environment that you want to train on')
+@click.option('--env', type=str, default='FetchReach-v1', help='the name of the Gym environment')
 @click.option('--total_timesteps', type=int, default=int(5e5), help='the number of timesteps to run')
-@click.option('--seed', type=int, default=0, help='the random seed used to seed both the environment and the training code')
-@click.option('--policy_save_interval', type=int, default=5, help='the interval with which policy pickles are saved. If set to 0, only the best and latest policy will be pickled.')
-@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
+@click.option('--seed', type=int, default=0, help='seed both the environment and the training code')
+@click.option('--policy_save_interval', type=int, default=5, help='the interval which policy pickles are saved. '
+                                                                  'If set to 0, only the best and latest policy will '
+                                                                  'be pickled.')
+@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future',
+              help='the HER replay strategy to be used. "future" uses HER, "none" disables HER.')
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default = 'PATH/TO/DEMO/DATA/FILE.npz', help='demo data file path')
+@click.option('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='demo data file path')
 def main(**kwargs):
     learn(**kwargs)
 

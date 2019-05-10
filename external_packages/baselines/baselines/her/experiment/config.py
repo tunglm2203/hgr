@@ -19,6 +19,10 @@ DEFAULT_ENV_PARAMS = {
         'bc_loss': 0,
         'q_filter': 0,
         'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_eps': 1e-6,
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
@@ -32,7 +36,11 @@ DEFAULT_ENV_PARAMS = {
         'q_filter': 1,
         'prm_loss_weight': 0.001,
         'aux_loss_weight':  0.0078,
-        'use_per': False,
+        'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_eps': 1e-6,
     },
 }
 
@@ -75,7 +83,13 @@ DEFAULT_PARAMS = {
     'demo_batch_size': 128, #number of samples to be used from the demonstrations buffer, per mpi thread 128/1024 or 32/256
     'prm_loss_weight': 0.001, #Weight corresponding to the primary loss
     'aux_loss_weight':  0.0078, #Weight corresponding to the auxilliary loss also called the cloning loss
+
     'use_per': False,
+    'prioritized_replay_alpha': 0.6,
+    'prioritized_replay_beta0': 0.4,
+    'prioritized_replay_beta_iters': None,
+    'prioritized_replay_eps': 1e-6,
+
 }
 
 
@@ -177,7 +191,7 @@ def simple_goal_subtract(a, b):
     return a - b
 
 
-def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
+def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, clip_return=True):
     sample_her_transitions = configure_her(params)
     # Extract relevant parameters.
     gamma = params['gamma']
@@ -203,7 +217,12 @@ def configure_ddpg(dims, params, reuse=False, use_mpi=True, clip_return=True):
                         'demo_batch_size': params['demo_batch_size'],
                         'prm_loss_weight': params['prm_loss_weight'],
                         'aux_loss_weight': params['aux_loss_weight'],
-                        'use_per': params['use_per']
+                        'use_per': params['use_per'],
+                        'prioritized_replay_alpha': params['prioritized_replay_alpha'],
+                        'prioritized_replay_beta0': params['prioritized_replay_beta0'],
+                        'prioritized_replay_beta_iters': params['prioritized_replay_beta_iters'],
+                        'prioritized_replay_eps': params['prioritized_replay_eps'],
+                        'total_timesteps': total_timesteps,
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],
