@@ -9,15 +9,15 @@ from baselines.bench.monitor import Monitor
 
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
-        'n_cycles': 1,
+        'n_cycles': 10,
         'n_batches': 40,
         'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.3,
         'noise_eps': 0.2,
-        'bc_loss': 0,
-        'q_filter': 0,
+        'bc_loss': False,
+        'q_filter': False,
         'use_per': True,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
@@ -32,8 +32,8 @@ DEFAULT_ENV_PARAMS = {
         'n_test_rollouts': 5,
         'random_eps': 0.1,
         'noise_eps': 0.1,
-        'bc_loss': 1,
-        'q_filter': 1,
+        'bc_loss': True,
+        'q_filter': True,
         'prm_loss_weight': 0.001,
         'aux_loss_weight':  0.0078,
         'use_per': True,
@@ -43,7 +43,6 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_eps': 1e-6,
     },
 }
-
 
 DEFAULT_PARAMS = {
     # env
@@ -77,19 +76,19 @@ DEFAULT_PARAMS = {
     'norm_eps': 0.01,  # epsilon used for observation normalization
     'norm_clip': 5,  # normalized observations are cropped to this values
 
-    'bc_loss': 0, # whether or not to use the behavior cloning loss as an auxilliary loss
-    'q_filter': 0, # whether or not a Q value filter should be used on the Actor outputs
-    'num_demo': 100, # number of expert demo episodes
-    'demo_batch_size': 128, #number of samples to be used from the demonstrations buffer, per mpi thread 128/1024 or 32/256
-    'prm_loss_weight': 0.001, #Weight corresponding to the primary loss
-    'aux_loss_weight':  0.0078, #Weight corresponding to the auxilliary loss also called the cloning loss
+    'bc_loss': False,  # whether or not to use the behavior cloning loss as an auxilliary loss
+    'q_filter': False,  # whether or not a Q value filter should be used on the Actor outputs
+    'num_demo': 100,  # number of expert demo episodes
+    'demo_batch_size': 128,
+    # number of samples to be used from the demonstrations buffer, per mpi thread 128/1024 or 32/256
+    'prm_loss_weight': 0.001,  # Weight corresponding to the primary loss
+    'aux_loss_weight': 0.0078,  # Weight corresponding to the auxilliary loss also called the cloning loss
 
     'use_per': False,
     'prioritized_replay_alpha': 0.6,
     'prioritized_replay_beta0': 0.4,
     'prioritized_replay_beta_iters': None,
     'prioritized_replay_eps': 1e-6,
-
 }
 
 
