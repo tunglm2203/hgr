@@ -89,7 +89,7 @@ def goToGoal(env, lastObs, use_with_ddpg_her):
         action = [0, 0, 0, 0]
 
         object_oriented_goal = object_rel_pos.copy()
-        object_oriented_goal[2] += 0.03  # tung: maybe z-axis, we want to move to above object
+        object_oriented_goal[2] += 0.03  # T: maybe z-axis, we want to move to above object
 
         for i in range(len(object_oriented_goal)):
             action[i] = object_oriented_goal[i] * 6
