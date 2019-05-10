@@ -16,7 +16,8 @@ class ReplayBuffer:
             sample_transitions (function): a function that samples from the replay buffer
         """
         self.buffer_shapes = buffer_shapes
-        self.size = size_in_transitions // T
+        self.size_in_transitions = size_in_transitions  # Measure in number of transitions
+        self.size = size_in_transitions // T    # Measure in number of episodes
         self.T = T
         self.sample_transitions = sample_transitions
 
@@ -127,7 +128,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._alpha = alpha
 
         it_capacity = 1
-        while it_capacity < self.size:
+        while it_capacity < self.size_in_transitions:
             it_capacity *= 2
 
         self._it_sum = SumSegmentTree(it_capacity)
