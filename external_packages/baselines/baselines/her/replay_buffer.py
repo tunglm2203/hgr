@@ -5,25 +5,26 @@ from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
 
 class ReplayBuffer:
-    def __init__(self, buffer_shapes, size_in_transitions, T, sample_transitions):
+    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, sample_transitions):
         """Creates a replay buffer.
 
         Args:
             buffer_shapes (dict of ints): the shape for all buffers that are used in the replay
                 buffer
             size_in_transitions (int): the size of the buffer, measured in transitions
-            T (int): the time horizon for episodes
+            time_horizon (int): the time horizon for episodes
             sample_transitions (function): a function that samples from the replay buffer
         """
         self.buffer_shapes = buffer_shapes
         self.size_in_transitions = size_in_transitions  # Measure in number of transitions
-        self.size_in_episodes = size_in_transitions // T    # Measure in number of episodes
-        self.T = T
+        self.size_in_episodes = size_in_transitions // time_horizon    # Measure in number of episodes
+        self.time_horizon = time_horizon
         self.sample_transitions = sample_transitions
 
-        # self.buffers is {key: array(size_in_episodes x T or T+1 x dim_key)}
-        self.buffers = {key: np.empty([self.size_in_episodes, *shape])
-                        for key, shape in buffer_shapes.items()}
+        # self.buffers is {key: array(size_in_episodes x time_horizon or time_horizon+1 x dim_key)}
+        self.buffers = {}
+        for key, shape in buffer_shapes.items():
+            self.buffers[key] = np.empty([self.size_in_episodes, *shape])
 
         # memory management
         self.current_size = 0
@@ -58,7 +59,7 @@ class ReplayBuffer:
         return transitions, [episode_idxs, t_samples]
 
     def store_episode(self, episode_batch):
-        """episode_batch: array(batch_size x (T or T+1) x dim_key)
+        """episode_batch: array(batch_size x (time_horizon or time_horizon+1) x dim_key)
         """
         batch_sizes = [len(episode_batch[key]) for key in episode_batch.keys()]
         assert np.all(np.array(batch_sizes) == batch_sizes[0])
@@ -71,7 +72,7 @@ class ReplayBuffer:
             for key in self.buffers.keys():
                 self.buffers[key][idxs] = episode_batch[key]
 
-            self.n_transitions_stored += batch_size * self.T
+            self.n_transitions_stored += batch_size * self.time_horizon
 
     def get_current_episode_size(self):
         with self.lock:
@@ -79,7 +80,7 @@ class ReplayBuffer:
 
     def get_current_size(self):
         with self.lock:
-            return self.current_size * self.T
+            return self.current_size * self.time_horizon
 
     def get_transitions_stored(self):
         with self.lock:
@@ -114,9 +115,10 @@ class ReplayBuffer:
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, buffer_shapes, size_in_transitions, T, alpha,
+    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha,
                  replay_strategy, replay_k, reward_fun):
-        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions, T - 1, sample_transitions=None)
+        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions,
+                                                      time_horizon, sample_transitions=None)
 
         if replay_strategy == 'future':
             self.future_p = 1 - (1. / (1 + replay_k))
@@ -136,7 +138,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._max_priority = 1.0
 
     def store_episode(self, episode_batch):
-        """episode_batch: array(batch_size x (T or T+1) x dim_key)
+        """episode_batch: array(batch_size x (time_horizon or time_horizon+1) x dim_key)
         """
         super().store_episode(episode_batch)
 
@@ -150,8 +152,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             batch_size = None
 
         for k in range(batch_size):
-            for i in range(self.T):
-                idx = idx_ep[k] * self.T + i
+            for i in range(self.time_horizon):
+                idx = idx_ep[k] * self.time_horizon + i
                 self._it_sum[idx] = self._max_priority ** self._alpha
                 self._it_min[idx] = self._max_priority ** self._alpha
 
@@ -166,7 +168,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         return res
 
     def _encode_sample(self, episode_batch, idxes):
-        T = episode_batch['u'].shape[1]
+        time_horizon = episode_batch['u'].shape[1]
         # rollout_batch_size = episode_batch['u'].shape[0]
         batch_size = len(idxes)
 
@@ -174,14 +176,19 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         episode_idxs = np.zeros(batch_size, dtype=np.int64)
         t_samples = np.zeros(batch_size, dtype=np.int64)
         for i in range(batch_size):
-            episode_idxs[i] = int(idxes[i] // self.T)
-            t_samples[i] = int(idxes[i] - (idxes[i] // self.T) * self.T)
-        transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
-                       for key in episode_batch.keys()}
+            episode_idxs[i] = int(idxes[i] // self.time_horizon)
+            t_samples[i] = int(idxes[i] - (idxes[i] // self.time_horizon) * self.time_horizon)
+        try:
+            transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
+                           for key in episode_batch.keys()}
+        except EnvironmentError:
+            # tung: debug
+            import pdb; pdb.set_trace()
+
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
         her_indexes = np.where(np.random.uniform(size=batch_size) < self.future_p)
-        future_offset = np.random.uniform(size=batch_size) * (T - t_samples)
+        future_offset = np.random.uniform(size=batch_size) * (time_horizon - t_samples)
         future_offset = future_offset.astype(int)
         future_t = (t_samples + 1 + future_offset)[her_indexes]
 
@@ -255,13 +262,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         return transitions, [episode_idxs, t_samples, weights, idxes]
 
     def sample_uniformly(self, episode_batch, batch_size_in_transitions):
-        T = episode_batch['u'].shape[1]
+        time_horizon = episode_batch['u'].shape[1]
         rollout_batch_size = episode_batch['u'].shape[0]
         batch_size = batch_size_in_transitions
 
         # Select which episodes and time steps to use.
         episode_idxs = np.random.randint(0, rollout_batch_size, batch_size)
-        t_samples = np.random.randint(T, size=batch_size)
+        t_samples = np.random.randint(time_horizon, size=batch_size)
         transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
                        for key in episode_batch.keys()}
 
@@ -292,20 +299,20 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._max_priority = max(self._max_priority, priority)
 
 
-def from_continous_idx_to_episode_idx(idxes, T):
+def from_continous_idx_to_episode_idx(idxes, time_horizon):
     batch_size = len(idxes)
 
     # Compute episodes and time steps to use from indexes (idxes)
     episode_idxs = np.zeros(batch_size, dtype=np.int64)
     t_samples = np.zeros(batch_size, dtype=np.int64)
     for i in range(batch_size):
-        episode_idxs[i] = int(idxes[i] // T)
-        t_samples[i] = int(idxes[i] - (idxes[i] // T) * T)
+        episode_idxs[i] = int(idxes[i] // time_horizon)
+        t_samples[i] = int(idxes[i] - (idxes[i] // time_horizon) * time_horizon)
 
     return episode_idxs, t_samples
 
 
-def from_episode_idx_to_continous_idx(episode_idxs, t_samples, T):
-    return episode_idxs * T + t_samples
+def from_episode_idx_to_continous_idx(episode_idxs, t_samples, time_horizon):
+    return episode_idxs * time_horizon + t_samples
 
 

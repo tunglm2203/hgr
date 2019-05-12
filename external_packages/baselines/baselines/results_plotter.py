@@ -1,94 +1,145 @@
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg') # Can change to 'Agg' for non-interactive mode
-
 import matplotlib.pyplot as plt
-plt.rcParams['svg.fonttype'] = 'none'
 
-from baselines.common import plot_util
+from baselines.bench.monitor import load_results
+
+# matplotlib.use('TkAgg')  # Can change to 'Agg' for non-interactive mode
+plt.rcParams['svg.fonttype'] = 'none'
 
 X_TIMESTEPS = 'timesteps'
 X_EPISODES = 'episodes'
 X_WALLTIME = 'walltime_hrs'
-Y_REWARD = 'reward'
-Y_TIMESTEPS = 'timesteps'
 POSSIBLE_X_AXES = [X_TIMESTEPS, X_EPISODES, X_WALLTIME]
 EPISODES_WINDOW = 100
 COLORS = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'purple', 'pink',
-        'brown', 'orange', 'teal', 'coral', 'lightblue', 'lime', 'lavender', 'turquoise',
-        'darkgreen', 'tan', 'salmon', 'gold', 'darkred', 'darkblue']
+          'brown', 'orange', 'teal', 'coral', 'lightblue', 'lime', 'lavender', 'turquoise',
+          'darkgreen', 'tan', 'salmon', 'gold', 'lightpurple', 'darkred', 'darkblue']
 
-def rolling_window(a, window):
-    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
-    strides = a.strides + (a.strides[-1],)
-    return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
 
-def window_func(x, y, window, func):
-    yw = rolling_window(y, window)
-    yw_func = func(yw, axis=-1)
-    return x[window-1:], yw_func
+def rolling_window(array, window):
+    """
+    apply a rolling window to a np.ndarray
 
-def ts2xy(ts, xaxis, yaxis):
+    :param array: (np.ndarray) the input Array
+    :param window: (int) length of the rolling window
+    :return: (np.ndarray) rolling window on the input array
+    """
+    shape = array.shape[:-1] + (array.shape[-1] - window + 1, window)
+    strides = array.strides + (array.strides[-1],)
+    return np.lib.stride_tricks.as_strided(array, shape=shape, strides=strides)
+
+
+def window_func(var_1, var_2, window, func):
+    """
+    apply a function to the rolling window of 2 arrays
+
+    :param var_1: (np.ndarray) variable 1
+    :param var_2: (np.ndarray) variable 2
+    :param window: (int) length of the rolling window
+    :param func: (numpy function) function to apply on the rolling window on variable 2 (such as np.mean)
+    :return: (np.ndarray, np.ndarray)  the rolling output with applied function
+    """
+    var_2_window = rolling_window(var_2, window)
+    function_on_var2 = func(var_2_window, axis=-1)
+    return var_1[window - 1:], function_on_var2
+
+
+def ts2xy(timesteps, xaxis):
+    """
+    Decompose a timesteps variable to x ans ys
+
+    :param timesteps: (Pandas DataFrame) the input data
+    :param xaxis: (str) the axis for the x and y output
+        (can be X_TIMESTEPS='timesteps', X_EPISODES='episodes' or X_WALLTIME='walltime_hrs')
+    :return: (np.ndarray, np.ndarray) the x and y output
+    """
     if xaxis == X_TIMESTEPS:
-        x = np.cumsum(ts.l.values)
+        x_var = np.cumsum(timesteps.l.values)
+        y_var = timesteps.r.values
     elif xaxis == X_EPISODES:
-        x = np.arange(len(ts))
+        x_var = np.arange(len(timesteps))
+        y_var = timesteps.r.values
     elif xaxis == X_WALLTIME:
-        x = ts.t.values / 3600.
+        x_var = timesteps.t.values / 3600.
+        y_var = timesteps.r.values
     else:
         raise NotImplementedError
-    if yaxis == Y_REWARD:
-        y = ts.r.values
-    elif yaxis == Y_TIMESTEPS:
-        y = ts.l.values
-    else:
-        raise NotImplementedError
-    return x, y
+    return x_var, y_var
 
-def plot_curves(xy_list, xaxis, yaxis, title):
-    fig = plt.figure(figsize=(8,2))
+
+def plot_curves(xy_list, xaxis, title):
+    """
+    plot the curves
+
+    :param xy_list: ([(np.ndarray, np.ndarray)]) the x and y coordinates to plot
+    :param xaxis: (str) the axis for the x and y output
+        (can be X_TIMESTEPS='timesteps', X_EPISODES='episodes' or X_WALLTIME='walltime_hrs')
+    :param title: (str) the title of the plot
+    """
+
+    plt.figure(figsize=(8, 2))
     maxx = max(xy[0][-1] for xy in xy_list)
     minx = 0
     for (i, (x, y)) in enumerate(xy_list):
-        color = COLORS[i % len(COLORS)]
+        color = COLORS[i]
         plt.scatter(x, y, s=2)
-        x, y_mean = window_func(x, y, EPISODES_WINDOW, np.mean) #So returns average of last EPISODE_WINDOW episodes
-        plt.plot(x, y_mean, color=color)
+        # Do not plot the smoothed curve at all if the timeseries is shorter than window size.
+        if x.shape[0] >= EPISODES_WINDOW:
+            # Compute and plot rolling mean with window of size EPISODE_WINDOW
+            x, y_mean = window_func(x, y, EPISODES_WINDOW, np.mean)
+            plt.plot(x, y_mean, color=color)
     plt.xlim(minx, maxx)
     plt.title(title)
     plt.xlabel(xaxis)
-    plt.ylabel(yaxis)
+    plt.ylabel("Episode Rewards")
     plt.tight_layout()
-    fig.canvas.mpl_connect('resize_event', lambda event: plt.tight_layout())
-    plt.grid(True)
 
 
-def split_by_task(taskpath):
-    return taskpath['dirname'].split('/')[-1].split('-')[0]
+def plot_results(dirs, num_timesteps, xaxis, task_name):
+    """
+    plot the results
 
-def plot_results(dirs, num_timesteps=10e6, xaxis=X_TIMESTEPS, yaxis=Y_REWARD, title='', split_fn=split_by_task):
-    results = plot_util.load_results(dirs)
-    plot_util.plot_results(results, xy_fn=lambda r: ts2xy(r['monitor'], xaxis, yaxis), split_fn=split_fn, average_group=True, resample=int(1e6))
+    :param dirs: ([str]) the save location of the results to plot
+    :param num_timesteps: (int or None) only plot the points below this value
+    :param xaxis: (str) the axis for the x and y output
+        (can be X_TIMESTEPS='timesteps', X_EPISODES='episodes' or X_WALLTIME='walltime_hrs')
+    :param task_name: (str) the title of the task to plot
+    """
 
-# Example usage in jupyter-notebook
-# from baselines.results_plotter import plot_results
-# %matplotlib inline
-# plot_results("./log")
-# Here ./log is a directory containing the monitor.csv files
+    tslist = []
+    for folder in dirs:
+        timesteps = load_results(folder)
+        if num_timesteps is not None:
+            timesteps = timesteps[timesteps.l.cumsum() <= num_timesteps]
+        tslist.append(timesteps)
+    xy_list = [ts2xy(timesteps_item, xaxis) for timesteps_item in tslist]
+    plot_curves(xy_list, xaxis, task_name)
+
 
 def main():
+    """
+    Example usage in jupyter-notebook
+
+    .. code-block:: python
+
+        from stable_baselines import results_plotter
+        %matplotlib inline
+        results_plotter.plot_results(["./log"], 10e6, log_viewer.X_TIMESTEPS, "Breakout")
+
+    Here ./log is a directory containing the monitor.csv files
+    """
     import argparse
     import os
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--dirs', help='List of log directories', nargs = '*', default=['./log'])
+    parser.add_argument('--dirs', help='List of log directories', nargs='*', default=['./log'])
     parser.add_argument('--num_timesteps', type=int, default=int(10e6))
-    parser.add_argument('--xaxis', help = 'Varible on X-axis', default = X_TIMESTEPS)
-    parser.add_argument('--yaxis', help = 'Varible on Y-axis', default = Y_REWARD)
-    parser.add_argument('--task_name', help = 'Title of plot', default = 'Breakout')
+    parser.add_argument('--xaxis', help='Varible on X-axis', default=X_TIMESTEPS)
+    parser.add_argument('--task_name', help='Title of plot', default='Breakout')
     args = parser.parse_args()
-    args.dirs = [os.path.abspath(dir) for dir in args.dirs]
-    plot_results(args.dirs, args.num_timesteps, args.xaxis, args.yaxis, args.task_name)
+    args.dirs = [os.path.abspath(folder) for folder in args.dirs]
+    plot_results(args.dirs, args.num_timesteps, args.xaxis, args.task_name)
     plt.show()
+
 
 if __name__ == '__main__':
     main()
