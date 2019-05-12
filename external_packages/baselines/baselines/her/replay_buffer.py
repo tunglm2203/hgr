@@ -5,7 +5,7 @@ from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
 
 class ReplayBuffer:
-    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, sample_transitions):
+    def __init__(self, buffer_shapes=None, size_in_transitions=0, time_horizon=0, sample_transitions=None):
         """Creates a replay buffer.
 
         Args:
@@ -16,8 +16,8 @@ class ReplayBuffer:
             sample_transitions (function): a function that samples from the replay buffer
         """
         self.buffer_shapes = buffer_shapes
-        self.size_in_transitions = size_in_transitions  # Measure in number of transitions
         self.size_in_episodes = size_in_transitions // time_horizon    # Measure in number of episodes
+        self.size_in_transitions = (size_in_transitions // time_horizon)*time_horizon  # Measure in number of transitions
         self.time_horizon = time_horizon
         self.sample_transitions = sample_transitions
 
@@ -117,8 +117,7 @@ class ReplayBuffer:
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha,
                  replay_strategy, replay_k, reward_fun):
-        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions, time_horizon,
-                                                      sample_transitions=None)
+        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions, time_horizon)
 
         if replay_strategy == 'future':
             self.future_p = 1 - (1. / (1 + replay_k))
@@ -180,13 +179,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         for i in range(batch_size):
             episode_idxs[i] = int(idxes[i] // self.time_horizon)
             t_samples[i] = int(idxes[i] % self.time_horizon)
-        try:
-            transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
-                           for key in episode_batch.keys()}
-        except EnvironmentError:
-            # tung: debug
-            print(idxes)
-            import pdb; pdb.set_trace()
+
+        transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
+                       for key in episode_batch.keys()}
 
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
@@ -317,5 +312,3 @@ def from_continous_idx_to_episode_idx(idxes, time_horizon):
 
 def from_episode_idx_to_continous_idx(episode_idxs, t_samples, time_horizon):
     return episode_idxs * time_horizon + t_samples
-
-

@@ -9,7 +9,7 @@ DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
         'n_batches': 40,
-        'rollout_batch_size': 1,
+        'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.3,

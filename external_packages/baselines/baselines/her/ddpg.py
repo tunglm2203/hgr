@@ -375,7 +375,6 @@ class DDPG(object):
         ag, ag_2 = transitions['ag'], transitions['ag_2']
         transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
         transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
-        import pdb; pdb.set_trace()
 
         transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
 
