@@ -345,8 +345,11 @@ class DDPG(object):
                 episode_idxs = np.concatenate((episode_idxs, episode_idxs_for_bc), axis=0)
                 t_samples = np.concatenate((t_samples, t_samples_for_bc), axis=0)
                 extra_info = [episode_idxs, t_samples, weights, idxes, weights_for_bc, idxes_for_bc]
+                transitions['important_weight'] = np.concatenate((weights, weights_for_bc), axis=0)
             else:
                 transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step))
+                weights = extra_info[2]
+                transitions['important_weight'] = weights
         else:
             if self.bc_loss:  # use demonstration buffer to sample
                 transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size)
@@ -366,13 +369,13 @@ class DDPG(object):
                 extra_info = [episode_idxs, t_samples]
             else:
                 transitions, extra_info = self.buffer.sample(self.batch_size)
+            transitions['important_weight'] = np.ones(self.batch_size)
 
         o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
         ag, ag_2 = transitions['ag'], transitions['ag_2']
         transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
         transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
-        transitions['important_weight'] = \
-            np.concatenate((weights, weights_for_bc), axis=0) if self.use_per else np.ones(self.batch_size)
+        import pdb; pdb.set_trace()
 
         transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
 
@@ -403,6 +406,39 @@ class DDPG(object):
             td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
             self._update(q_grad, pi_grad)
             return td_error, critic_loss, actor_loss
+
+    def get_current_buffer_size(self):
+        return self.buffer.get_current_size()
+
+    def _sync_optimizers(self):
+        self.Q_adam.sync()
+        self.pi_adam.sync()
+
+    def _grads(self):
+        # Avoid feed_dict here for performance!
+        if self.bc_loss == 1:
+            td_error, critic_loss, actor_loss, q_grad, pi_grad, cloning_loss = self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+                self.cloning_loss_tf
+            ])
+            return td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad
+        else:
+            td_error, critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+            ])
+            return td_error, critic_loss, actor_loss, q_grad, pi_grad
+
+    def _update(self, q_grad, pi_grad):
+        self.Q_adam.update(q_grad, self.q_lr)
+        self.pi_adam.update(pi_grad, self.pi_lr)
 
     def clear_buffer(self):
         self.buffer.clear_buffer()
