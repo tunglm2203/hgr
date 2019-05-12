@@ -54,14 +54,18 @@ def pad(xs, value=np.nan):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dir', type=str)
+parser.add_argument('--dir', type=str, nargs='+')
 parser.add_argument('--smooth', type=int, default=1)
 args = parser.parse_args()
 
-# Load all data.
 
-directory = ['../logs/pickplace/ap2_off_epoch_5', '../logs/pickplace/baseline', '../logs/pickplace/ap2_off_100']
+directory = []
+for i in range(len(args.dir)):
+    if args.dir[i][-1] == '/':
+        directory.append(args.dir[i][:-1])
+# directory = ['../logs/pickplace/ap2_off_epoch_5', '../logs/pickplace/baseline', '../logs/pickplace/ap2_off_100']
 collect_data = []
+
 
 for dir in directory:
     args.dir = dir
