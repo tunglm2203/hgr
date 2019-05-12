@@ -1,7 +1,7 @@
 import os
 import sys
 
-import click
+import argparse
 import numpy as np
 import json
 from mpi4py import MPI
@@ -18,6 +18,11 @@ from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from baselines.her.my_utils import tensorboard_log
 
+import multiprocessing, logging
+
+mpl = multiprocessing.log_to_stderr()
+mpl.setLevel(logging.INFO)
+
 
 def mpi_average(value):
     if value == []:
@@ -33,13 +38,13 @@ def train(policy, rollout_worker, evaluator,
     rank = MPI.COMM_WORLD.Get_rank()
 
     tensorboard = SummaryWriter(logdir)
-    if logdir:
-        latest_policy_path = os.path.join(logdir, 'policy_latest.pkl')
-        best_policy_path = os.path.join(logdir, 'policy_best.pkl')
-        periodic_policy_path = os.path.join(logdir, 'policy_epoch_{}_cycle_{}.pkl')
+    latest_policy_path = os.path.join(logdir, 'policy_latest.pkl')
+    best_policy_path = os.path.join(logdir, 'policy_best.pkl')
+    periodic_policy_path = os.path.join(logdir, 'policy_epoch_{}_cycle_{}.pkl')
 
     logger.info("Training...")
     best_success_rate = -1
+    cloning_loss = 0.
 
     # td_error_log = {
     #     'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
@@ -52,15 +57,20 @@ def train(policy, rollout_worker, evaluator,
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
     for epoch in tqdm(range(n_epochs)):
         # train
-        logger.info("[INFO] %s" % logdir)
+        logger.info("\n[INFO] %s" % logdir)
         rollout_worker.clear_history()
         total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
-        for cycle_idx in tqdm(range(n_cycles)):
+        for cycle_idx in range(n_cycles):
             episode = rollout_worker.generate_rollouts()
             policy.store_episode(episode)
+            # print cpname
+            cpname = multiprocessing.current_process().name
+            mpl.info("\n{}-rank{} size buffer: {}".format(cpname, rank, policy.buffer.get_current_size()))
+
             for _ in range(n_batches):
                 if policy.bc_loss:
-                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=policy.buffer.get_current_size())
+                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(
+                        time_step=policy.buffer.get_current_size())
                 else:
                     td_errors, critic_loss, actor_loss = policy.train(time_step=policy.buffer.get_current_size())
 
@@ -71,7 +81,8 @@ def train(policy, rollout_worker, evaluator,
                         new_priorities_for_bc = np.abs(td_errors[policy.demo_batch_size:]) + \
                                                 policy.prioritized_replay_eps
                         policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
-                        policy.demo_buffer.update_priorities(policy.important_weight_idxes_for_bc, new_priorities_for_bc)
+                        policy.demo_buffer.update_priorities(policy.important_weight_idxes_for_bc,
+                                                             new_priorities_for_bc)
                     else:
                         new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
                         policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
@@ -170,8 +181,6 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     :param clip_return: (float): clip returns to be in [-clip_return, clip_return]
     :param demo_file: (str) the path to the demonstration file
     :param override_params: (dict) override any parameter for training
-    :param save_policies: (bool) whether or not to save the policies
-    :param total_timesteps: (int) Number of time step interacting to environment
     """
     if override_params is None:
         override_params = {}
@@ -215,8 +224,6 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
         json.dump(params, f)
     params = config.prepare_params(params)
 
-    if demo_file is not None:
-        params['bc_loss'] = 1
     params.update(kwargs)
     config.log_params(params, logger_input=logger)
 
@@ -266,8 +273,6 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     evaluator = RolloutWorker(params['make_env'], policy, dims, logger, **eval_params)
     evaluator.seed(rank_seed)
 
-    # n_epochs = total_timesteps // params['n_cycles'] // rollout_worker.time_horizon // rollout_worker.rollout_batch_size
-
     train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
           n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'], n_cycles=params['n_cycles'],
           n_batches=params['n_batches'], policy_save_interval=policy_save_interval,
@@ -275,21 +280,36 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
           )
 
 
-@click.command()
-@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the Gym environment')
-@click.option('--logdir', type=str, default=None,
-              help='the path to where logs and policy pickles should go. If not specified, creates a folder in /tmp/')
-@click.option('--n_epochs', type=int, default=50, help='the number of training epochs to run')
-@click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
-# @click.option('--total_timesteps', type=int, default=int(5e5), help='the number of timesteps to run')
-@click.option('--seed', type=int, default=0, help='seed both the environment and the training code')
-@click.option('--policy_save_interval', type=int, default=5, help='If 0, only the best and latest policy be pickled')
-@click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='"future" uses HER, '
-                                                                                                 '"none" disables HER.')
-@click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
-@click.option('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='demo data file path')
-def main(**kwargs):
-    launch(**kwargs)
+parser = argparse.ArgumentParser(description='Reinforcement Learning')
+parser.add_argument('--env', type=str, default='FetchPickAndPlace-v1', help='The name of the Gym environment')
+parser.add_argument('--logdir', type=str, default='test', help='Path to save training informatiion (model, log, etc.)')
+parser.add_argument('--n_epochs', type=int, default=50, help='The number of training epochs to run')
+parser.add_argument('--num_cpu', type=int, default=1, help='The number of CPU cores to use (using MPI)')
+parser.add_argument('--seed', type=int, default=0, help='Seed both the environment and the training code')
+parser.add_argument('--policy_save_interval', type=int, default=5, help='If 0 only the best & latest policy be pickled')
+parser.add_argument('--replay_strategy', type=str, default='future', help='"future" uses HER, "none" disables HER')
+parser.add_argument('--clip_return', action='store_false', help='Whether or not returns should be clipped')
+parser.add_argument('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='Demo data file path')
+# Get argument from command line
+args = parser.parse_args()
+print('--------- YOUR SETTING ---------')
+for arg in vars(args):
+    print("%15s: %s" % (str(arg), str(getattr(args, arg))))
+print("")
+
+
+def main():
+    launch(env=args.env,
+           logdir=args.logdir,
+           n_epochs=args.n_epochs,
+           num_cpu=args.num_cpu,
+           seed=args.seed,
+           replay_strategy=args.replay_strategy,
+           policy_save_interval=args.policy_save_interval,
+           clip_return=args.clip_return,
+           demo_file=args.demo_file,
+           override_params=None,
+           load_path=None)
 
 
 if __name__ == '__main__':

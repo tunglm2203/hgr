@@ -1,23 +1,23 @@
-import os
 import numpy as np
 import gym
 
 from baselines import logger
 from baselines.her.ddpg import DDPG
 from baselines.her.her_sampler import make_sample_her_transitions
-from baselines.bench.monitor import Monitor
 
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
         'n_batches': 40,
-        'rollout_batch_size': 2,
+        'rollout_batch_size': 1,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.3,
         'noise_eps': 0.2,
+
         'bc_loss': False,
         'q_filter': False,
+
         'use_per': True,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
@@ -28,16 +28,39 @@ DEFAULT_ENV_PARAMS = {
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
         'n_batches': 40,
+        'rollout_batch_size': 2,
+        'batch_size': 256,
+        'n_test_rollouts': 5,
+        'random_eps': 0.1,
+        'noise_eps': 0.1,
+
+        'bc_loss': True,
+        'q_filter': True,
+        'prm_loss_weight': 0.001,
+        'aux_loss_weight': 0.0078,
+
+        'use_per': True,  # default: True
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+    },
+    'FetchPush-v1': {
+        'n_cycles': 50,
+        'n_batches': 40,
         'rollout_batch_size': 1,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.1,
         'noise_eps': 0.1,
-        'bc_loss': True,
-        'q_filter': True,
+
+        'bc_loss': False,
+        'q_filter': False,
         'prm_loss_weight': 0.001,
-        'aux_loss_weight':  0.0078,
-        'use_per': True,
+        'aux_loss_weight': 0.0078,
+
+        'use_per': False,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
@@ -63,7 +86,7 @@ DEFAULT_PARAMS = {
     'relative_goals': False,
     # training
     'n_cycles': 50,  # per epoch
-    'rollout_batch_size': 2,  # per mpi thread
+    'rollout_batch_size': 2,  # per mpi thread (number of collected episodes each time execution)
     'n_batches': 40,  # training batches per cycle
     'batch_size': 256,  # per mpi thread, measured in transitions and reduced to even multiple of chunk_length.
     'n_test_rollouts': 10,  # number of test rollouts per epoch, each consists of rollout_batch_size rollouts
@@ -95,7 +118,6 @@ DEFAULT_PARAMS = {
     'use_huber_loss': False,
 }
 
-
 CACHED_ENVS = {}
 
 
@@ -124,30 +146,13 @@ def prepare_params(kwargs):
 
     env_name = kwargs['env_name']
 
-    def make_env(subrank=None):
-        env = gym.make(env_name)
-        # TODO: clean this code like-stable-baselines
-        # if subrank is not None and logger.get_dir() is not None:
-        #     try:
-        #         from mpi4py import MPI
-        #         mpi_rank = MPI.COMM_WORLD.Get_rank()
-        #     except ImportError:
-        #         MPI = None
-        #         mpi_rank = 0
-        #         logger.warn('Running with a single MPI process. This should work, '
-        #                     'but the results may differ from the ones publshed in Plappert et al.')
-        #
-        #     max_episode_steps = env._max_episode_steps
-        #     env = Monitor(env, os.path.join(logger.get_dir(), str(mpi_rank) + '.' + str(subrank)),
-        #                   allow_early_resets=True)
-        #     # hack to re-expose _max_episode_steps (ideally should replace reliance on it downstream)
-        #     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
-        return env
+    def make_env():
+        return gym.make(env_name)
 
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
     assert hasattr(tmp_env, '_max_episode_steps')
-    kwargs['time_horizon'] = tmp_env._max_episode_steps     # TODO: don't access private variable, access by spec
+    kwargs['time_horizon'] = tmp_env.spec.max_episode_steps  # wrapped envs preserve their spec
 
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
     kwargs['gamma'] = 1. - 1. / kwargs['time_horizon']

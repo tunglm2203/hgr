@@ -117,8 +117,8 @@ class ReplayBuffer:
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha,
                  replay_strategy, replay_k, reward_fun):
-        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions,
-                                                      time_horizon, sample_transitions=None)
+        super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions, time_horizon,
+                                                      sample_transitions=None)
 
         if replay_strategy == 'future':
             self.future_p = 1 - (1. / (1 + replay_k))
@@ -144,14 +144,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         idx_ep = self._next_idx
         if isinstance(idx_ep, np.int64):
-            batch_size = 1
+            rollout_batch_size = 1
             idx_ep = np.array([idx_ep])
         elif isinstance(idx_ep, np.ndarray):
-            batch_size = idx_ep.shape[0]
+            rollout_batch_size = idx_ep.shape[0]
         else:
-            batch_size = None
+            rollout_batch_size = None
 
-        for k in range(batch_size):
+        for k in range(rollout_batch_size):
             for i in range(self.time_horizon):
                 idx = idx_ep[k] * self.time_horizon + i
                 self._it_sum[idx] = self._max_priority ** self._alpha
@@ -159,7 +159,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
     def _sample_proportional(self, batch_size):
         res = []
-        p_total = self._it_sum.sum(0, self.get_current_size())
+        p_total = self._it_sum.sum(0, self.get_current_size())  # tung: Do we need self.get_current_size() - 1
         every_range_len = p_total / batch_size
         for i in range(batch_size):
             mass = np.random.uniform() * every_range_len + i * every_range_len
@@ -168,6 +168,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         return res
 
     def _encode_sample(self, episode_batch, idxes):
+        assert max(idxes) < self.get_current_size(), '[AIM_ERROR]: The maximum of index is out of range: {}'.format(
+            max(idxes))
         time_horizon = episode_batch['u'].shape[1]
         # rollout_batch_size = episode_batch['u'].shape[0]
         batch_size = len(idxes)
@@ -177,12 +179,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         t_samples = np.zeros(batch_size, dtype=np.int64)
         for i in range(batch_size):
             episode_idxs[i] = int(idxes[i] // self.time_horizon)
-            t_samples[i] = int(idxes[i] - (idxes[i] // self.time_horizon) * self.time_horizon)
+            t_samples[i] = int(idxes[i] % self.time_horizon)
         try:
             transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
                            for key in episode_batch.keys()}
         except EnvironmentError:
             # tung: debug
+            print(idxes)
             import pdb; pdb.set_trace()
 
         # Select future time indexes proportional with probability future_p. These
@@ -198,7 +201,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         future_ag = episode_batch['ag'][episode_idxs[her_indexes], future_t]
         transitions['g'][her_indexes] = future_ag
 
-        # Reconstruct info dictionary for reward  computation.
+        # Reconstruct info dictionary for reward computation.
         info = {}
         for key, value in transitions.items():
             if key.startswith('info_'):

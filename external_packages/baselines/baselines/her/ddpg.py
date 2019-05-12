@@ -323,39 +323,6 @@ class DDPG(object):
             self.o_stats.recompute_stats()
             self.g_stats.recompute_stats()
 
-    def get_current_buffer_size(self):
-        return self.buffer.get_current_size()
-
-    def _sync_optimizers(self):
-        self.Q_adam.sync()
-        self.pi_adam.sync()
-
-    def _grads(self):
-        # Avoid feed_dict here for performance!
-        if self.bc_loss == 1:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad, cloning_loss = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
-                self.pi_loss_tf,
-                self.Q_grad_tf,
-                self.pi_grad_tf,
-                self.cloning_loss_tf
-            ])
-            return td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad
-        else:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
-                self.pi_loss_tf,
-                self.Q_grad_tf,
-                self.pi_grad_tf,
-            ])
-            return td_error, critic_loss, actor_loss, q_grad, pi_grad
-
-    def _update(self, q_grad, pi_grad):
-        self.Q_adam.update(q_grad, self.q_lr)
-        self.pi_adam.update(pi_grad, self.pi_lr)
-
     def sample_batch(self, time_step=None):
         weights = np.zeros(self.batch_size)
         weights_for_bc = np.zeros(self.batch_size)
