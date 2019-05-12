@@ -66,11 +66,11 @@ class DDPG(object):
         :param use_per: (boolean) whether or not use Prioritized Replay Buffer (PER)
         :param total_timesteps: (int) number of timesteps for training
         :param reuse: (boolean) whether or not the networks should be reused
-        #TODO: comment variables for PER
-        :param prioritized_replay_alpha: (float)
-        :param prioritized_replay_beta0: (float)
-        :param prioritized_replay_beta_iters: (int)
-        :param prioritized_replay_eps: (float)
+        :param prioritized_replay_alpha: (float) alpha parameter for prioritized replay buffer
+        :param prioritized_replay_beta0: (float) initial value of beta for prioritized replay buffer
+        :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial value
+        to 1.0. If set to None equals to total_timesteps.
+        :param prioritized_replay_eps: (float) epsilon to add to the TD errors when updating priorities
         :param use_huber_loss: (boolean)
         """
 
@@ -119,8 +119,8 @@ class DDPG(object):
 
         input_shapes = dims_to_shapes(self.input_dims)
         self.dimo = self.input_dims['o']
-        self.dimg = self.input_dims['g']
         self.dimu = self.input_dims['u']
+        self.dimg = self.input_dims['g']
 
         # Prepare staging area for feeding data to the model
         stage_shapes = OrderedDict()
@@ -134,7 +134,7 @@ class DDPG(object):
         stage_shapes['important_weight'] = (None,)
         self.stage_shapes = stage_shapes
 
-        # Create network.
+        # Create network
         with tf.variable_scope(self.scope):
             self.staging_tf = StagingArea(
                 dtypes=[tf.float32 for _ in self.stage_shapes.keys()],
@@ -146,11 +146,11 @@ class DDPG(object):
 
             self._create_network(reuse=reuse)
 
-        # Configure the replay buffer.
-        buffer_shapes = {key: (self.time_horizon - 1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        # Configure the replay buffer
+        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1,
+                               *input_shapes[key])
                          for key, val in input_shapes.items()}
-        buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
-        buffer_shapes['ag'] = (self.time_horizon, self.dimg)
+        buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
 
         if self.use_per:
             self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
@@ -235,29 +235,30 @@ class DDPG(object):
         else:
             return ret
 
-    def init_demo_buffer(self, demoDataFile, update_stats=True):  # function that initializes the demo buffer
+    def init_demo_buffer(self, demo_data_file, update_stats=True):  # function that initializes the demo buffer
 
-        demoData = np.load(demoDataFile)  # load the demonstration data from data file
+        demoData = np.load(demo_data_file)  # load the demonstration data from data file
         info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.time_horizon - 1, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
 
         demo_data_obs = demoData['obs']
         demo_data_acs = demoData['acs']
         demo_data_info = demoData['info']
 
-        for epsd in range(self.num_demo):  # we initialize the whole demo buffer at the start of the training
+        # Initializing the whole demo buffer at the start of the training
+        for epsd in range(self.num_demo):
             obs, acts, goals, achieved_goals = [], [], [], []
             i = 0
-            for transition in range(self.time_horizon - 1):
-                obs.append([demo_data_obs[epsd][transition].get('observation')])
+            # This loop is necessary since demontration data might have different format with episode
+            for transition in range(self.time_horizon):
+                obs.append([demo_data_obs[epsd][transition]['observation']])
                 acts.append([demo_data_acs[epsd][transition]])
-                goals.append([demo_data_obs[epsd][transition].get('desired_goal')])
-                achieved_goals.append([demo_data_obs[epsd][transition].get('achieved_goal')])
+                goals.append([demo_data_obs[epsd][transition]['desired_goal']])
+                achieved_goals.append([demo_data_obs[epsd][transition]['achieved_goal']])
                 for idx, key in enumerate(info_keys):
                     info_values[idx][transition, i] = demo_data_info[epsd][transition][key]
-
-            obs.append([demo_data_obs[epsd][self.time_horizon - 1].get('observation')])
-            achieved_goals.append([demo_data_obs[epsd][self.time_horizon - 1].get('achieved_goal')])
+            obs.append([demo_data_obs[epsd][self.time_horizon]['observation']])
+            achieved_goals.append([demo_data_obs[epsd][self.time_horizon]['achieved_goal']])
 
             episode = dict(o=obs,
                            u=acts,
@@ -267,13 +268,12 @@ class DDPG(object):
                 episode['info_{}'.format(key)] = value
 
             episode = convert_episode_to_batch_major(episode)
-            self.demo_buffer.store_episode(
-                episode)  # create the observation dict and append them into the demonstration buffer
-            logger.debug("Demo buffer size currently ",
-                         self.demo_buffer.get_current_size())  # print out the demonstration buffer size
+            # create the observation dict and append them into the demonstration buffer
+            self.demo_buffer.store_episode(episode)
+            logger.debug("Demo buffer size currently ", self.demo_buffer.get_current_size())
 
+            # add transitions to normalizer to normalize the demo data as well
             if update_stats:
-                # add transitions to normalizer to normalize the demo data as well
                 episode['o_2'] = episode['o'][:, 1:, :]
                 episode['ag_2'] = episode['ag'][:, 1:, :]
                 num_normalizing_transitions = transitions_in_episode_batch(episode)
@@ -296,23 +296,22 @@ class DDPG(object):
         logger.info("Demo buffer size: ",
                     self.demo_buffer.get_current_size())  # print out the demonstration buffer size
 
-    def store_episode(self, episode_batch, update_stats=True):
+    def store_episode(self, episode, update_stats=True):
         """
         episode_batch: array of batch_size x (T or T+1) x dim_key
                        'o' is of size T+1, others are of size T
         """
+        self.buffer.store_episode(episode)
 
-        self.buffer.store_episode(episode_batch)
-
+        # add transitions to normalizer
         if update_stats:
-            # add transitions to normalizer
-            episode_batch['o_2'] = episode_batch['o'][:, 1:, :]
-            episode_batch['ag_2'] = episode_batch['ag'][:, 1:, :]
-            num_normalizing_transitions = transitions_in_episode_batch(episode_batch)
+            episode['o_2'] = episode['o'][:, 1:, :]
+            episode['ag_2'] = episode['ag'][:, 1:, :]
+            num_normalizing_transitions = transitions_in_episode_batch(episode)
             if self.use_per:
-                transitions, _ = self.buffer.sample_uniformly(episode_batch, num_normalizing_transitions)
+                transitions, _ = self.buffer.sample_uniformly(episode, num_normalizing_transitions)
             else:
-                transitions, _ = self.sample_transitions(episode_batch, num_normalizing_transitions)
+                transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
             o, g, ag = transitions['o'], transitions['g'], transitions['ag']
             transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
@@ -414,7 +413,7 @@ class DDPG(object):
 
     def stage_batch(self, batch=None, time_step=None):
         if batch is None:
-            # Don't get important weight `weights` here since it is included in `batch`
+            # Don't get important weight `weights` here since it is already included in `batch`
             batch, extra_info = self.sample_batch(time_step=time_step)
             self.episode_idxs, self.t_samples = extra_info[:2]
             if self.use_per:
@@ -611,5 +610,6 @@ class DDPG(object):
         node = [tf.assign(var, val) for var, val in zip(vars, state["tf"])]
         self.sess.run(node)
 
+    # TODO: modifying this function for continuely training policy
     def save(self, save_path):
         tf_util.save_variables(save_path)

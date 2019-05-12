@@ -1,4 +1,5 @@
 import os
+import sys
 
 import click
 import numpy as np
@@ -10,9 +11,12 @@ from baselines.common import set_global_seeds, tf_util
 from baselines.common.mpi_moments import mpi_moments
 import baselines.her.experiment.config as config
 from baselines.her.rollout import RolloutWorker
+
+from subprocess import CalledProcessError
+from baselines.her.util import mpi_fork
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
-from my_utils import tensorboard_log
+from baselines.her.my_utils import tensorboard_log
 
 
 def mpi_average(value):
@@ -51,7 +55,7 @@ def train(policy, rollout_worker, evaluator,
         logger.info("[INFO] %s" % logdir)
         rollout_worker.clear_history()
         total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
-        for cycle_idx in range(n_cycles):
+        for cycle_idx in tqdm(range(n_cycles)):
             episode = rollout_worker.generate_rollouts()
             policy.store_episode(episode)
             for _ in range(n_batches):
@@ -149,21 +153,51 @@ def train(policy, rollout_worker, evaluator,
     return policy
 
 
-def learn(*, network, env, total_timesteps,
-          seed=None,
-          eval_env=None,
-          replay_strategy='future',
-          policy_save_interval=5,
-          clip_return=True,
-          demo_file=None,
-          override_params=None,
-          load_path=None,
-          **kwargs):
-    override_params = override_params or {}
-    num_cpu = 1
-    if MPI is not None:
-        rank = MPI.COMM_WORLD.Get_rank()
-        num_cpu = MPI.COMM_WORLD.Get_size()
+def launch(env, logdir, n_epochs, num_cpu, seed=None,
+           replay_strategy='future', policy_save_interval=5, clip_return=True,
+           demo_file=None, override_params=None, load_path=None,
+           **kwargs):
+    """
+    launch training with mpi
+    :param env: (str) environment ID
+    :param logdir: (str) the log directory
+    :param n_epochs: (int) the number of training epochs
+    :param num_cpu: (int) the number of CPUs to run on
+    :param seed: (int) the initial random seed
+    :param replay_strategy: (str) the type of replay strategy ('future' or 'none')
+    :param policy_save_interval: (int) the interval with which policy pickles are saved.
+        If set to 0, only the best and latest policy will be pickled.
+    :param clip_return: (float): clip returns to be in [-clip_return, clip_return]
+    :param demo_file: (str) the path to the demonstration file
+    :param override_params: (dict) override any parameter for training
+    :param save_policies: (bool) whether or not to save the policies
+    :param total_timesteps: (int) Number of time step interacting to environment
+    """
+    if override_params is None:
+        override_params = {}
+
+    # Fork for multi-CPU MPI implementation.
+    if num_cpu > 1:
+        try:
+            whoami = mpi_fork(num_cpu, ['--bind-to', 'core'])
+        except CalledProcessError:
+            # fancy version of mpi call failed, try simple version
+            whoami = mpi_fork(num_cpu)
+
+        if whoami == 'parent':
+            sys.exit(0)
+        tf_util.single_threaded_session().__enter__()
+    rank = MPI.COMM_WORLD.Get_rank()
+
+    # Configure logging
+    if rank == 0:
+        if logdir or logger.get_dir() is None:
+            logger.configure(folder=logdir)
+    else:
+        logger.configure()
+    logdir = logger.get_dir()
+    assert logdir is not None
+    os.makedirs(logdir, exist_ok=True)
 
     # Seed everything.
     rank_seed = seed + 1000000 * rank if seed is not None else None
@@ -171,22 +205,19 @@ def learn(*, network, env, total_timesteps,
 
     # Prepare params.
     params = config.DEFAULT_PARAMS
-    env_name = env.spec.id
-    params['env_name'] = env_name
+    params['env_name'] = env
     params['replay_strategy'] = replay_strategy
-    if env_name in config.DEFAULT_ENV_PARAMS:
-        params.update(config.DEFAULT_ENV_PARAMS[env_name])  # merge env-specific parameters in
+    if env in config.DEFAULT_ENV_PARAMS:
+        params.update(config.DEFAULT_ENV_PARAMS[env])  # merge env-specific parameters in
 
     params.update(**override_params)  # makes it possible to override any parameter
     with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
         json.dump(params, f)
     params = config.prepare_params(params)
-    params['rollout_batch_size'] = env.num_envs
 
     if demo_file is not None:
         params['bc_loss'] = 1
     params.update(kwargs)
-
     config.log_params(params, logger_input=logger)
 
     if num_cpu == 1:
@@ -202,23 +233,26 @@ def learn(*, network, env, total_timesteps,
         logger.warn()
 
     dims = config.configure_dims(params)
+    # TODO: Need to test with `rollout_batch_size` > 1
+    total_timesteps = n_epochs * params['n_cycles'] * params['time_horizon'] * params['rollout_batch_size']
     policy = config.configure_ddpg(dims=dims, params=params, clip_return=clip_return, total_timesteps=total_timesteps)
     if load_path is not None:
         tf_util.load_variables(load_path)
 
+    # TODO: clean these variables not use
     rollout_params = {
         'exploit': False,
         'use_target_net': False,
-        'use_demo_states': True,
-        'compute_Q': False,
+        # 'use_demo_states': True,
+        'compute_q': False,
         'time_horizon': params['time_horizon'],
     }
 
     eval_params = {
         'exploit': True,
         'use_target_net': params['test_with_polyak'],
-        'use_demo_states': False,
-        'compute_Q': True,
+        # 'use_demo_states': False,
+        'compute_q': True,
         'time_horizon': params['time_horizon'],
     }
 
@@ -226,25 +260,28 @@ def learn(*, network, env, total_timesteps,
         rollout_params[name] = params[name]
         eval_params[name] = params[name]
 
-    eval_env = eval_env or env
+    rollout_worker = RolloutWorker(params['make_env'], policy, dims, logger, **rollout_params)
+    rollout_worker.seed(rank_seed)
 
-    rollout_worker = RolloutWorker(env, policy, dims, logger, monitor=True, **rollout_params)
-    evaluator = RolloutWorker(eval_env, policy, dims, logger, **eval_params)
+    evaluator = RolloutWorker(params['make_env'], policy, dims, logger, **eval_params)
+    evaluator.seed(rank_seed)
 
-    n_cycles = params['n_cycles']
-    n_epochs = total_timesteps // n_cycles // rollout_worker.time_horizon // rollout_worker.rollout_batch_size
+    # n_epochs = total_timesteps // params['n_cycles'] // rollout_worker.time_horizon // rollout_worker.rollout_batch_size
 
-    return train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
-                 n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'],
-                 n_cycles=params['n_cycles'], n_batches=params['n_batches'],
-                 policy_save_interval=policy_save_interval, demo_file=demo_file, logdir=kwargs['logdir'],
-                 use_per=params['use_per']
-                 )
+    train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
+          n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'], n_cycles=params['n_cycles'],
+          n_batches=params['n_batches'], policy_save_interval=policy_save_interval,
+          demo_file=demo_file, logdir=logdir, use_per=params['use_per']
+          )
 
 
 @click.command()
-@click.option('--env', type=str, default='FetchReach-v1', help='the name of the Gym environment')
-@click.option('--total_timesteps', type=int, default=int(5e5), help='the number of timesteps to run')
+@click.option('--env', type=str, default='FetchPickAndPlace-v1', help='the name of the Gym environment')
+@click.option('--logdir', type=str, default=None,
+              help='the path to where logs and policy pickles should go. If not specified, creates a folder in /tmp/')
+@click.option('--n_epochs', type=int, default=50, help='the number of training epochs to run')
+@click.option('--num_cpu', type=int, default=1, help='the number of CPU cores to use (using MPI)')
+# @click.option('--total_timesteps', type=int, default=int(5e5), help='the number of timesteps to run')
 @click.option('--seed', type=int, default=0, help='seed both the environment and the training code')
 @click.option('--policy_save_interval', type=int, default=5, help='If 0, only the best and latest policy be pickled')
 @click.option('--replay_strategy', type=click.Choice(['future', 'none']), default='future', help='"future" uses HER, '
@@ -252,7 +289,7 @@ def learn(*, network, env, total_timesteps,
 @click.option('--clip_return', type=int, default=1, help='whether or not returns should be clipped')
 @click.option('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='demo data file path')
 def main(**kwargs):
-    learn(**kwargs)
+    launch(**kwargs)
 
 
 if __name__ == '__main__':
