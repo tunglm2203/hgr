@@ -273,7 +273,27 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, cli
     ddpg_params['info'] = {
         'env_name': params['env_name'],
     }
-    policy = DDPG(reuse=reuse, **ddpg_params, use_mpi=use_mpi)
+    policy = DDPG(input_dims=ddpg_params['input_dims'], buffer_size=ddpg_params['buffer_size'],
+                  hidden=ddpg_params['hidden'], layers=ddpg_params['layers'],
+                  network_class=ddpg_params['network_class'], polyak=ddpg_params['polyak'],
+                  batch_size=ddpg_params['batch_size'], q_lr=ddpg_params['q_lr'],
+                  pi_lr=ddpg_params['pi_lr'], norm_eps=ddpg_params['norm_eps'],
+                  norm_clip=ddpg_params['norm_clip'], max_u=ddpg_params['max_u'],
+                  action_l2=ddpg_params['action_l2'], clip_obs=ddpg_params['clip_obs'], scope=ddpg_params['scope'],
+                  time_horizon=ddpg_params['time_horizon'], rollout_batch_size=ddpg_params['rollout_batch_size'],
+                  subtract_goals=ddpg_params['subtract_goals'], relative_goals=ddpg_params['relative_goals'],
+                  clip_pos_returns=ddpg_params['clip_pos_returns'], clip_return=ddpg_params['clip_return'],
+                  bc_loss=ddpg_params['bc_loss'], q_filter=ddpg_params['q_filter'], num_demo=ddpg_params['num_demo'],
+                  demo_batch_size=ddpg_params['demo_batch_size'], prm_loss_weight=ddpg_params['prm_loss_weight'],
+                  aux_loss_weight=ddpg_params['aux_loss_weight'], sample_transitions=ddpg_params['sample_transitions'],
+                  gamma=ddpg_params['gamma'], use_per=ddpg_params['use_per'],
+                  total_timesteps=ddpg_params['total_timesteps'],
+                  prioritized_replay_alpha=ddpg_params['prioritized_replay_alpha'],
+                  prioritized_replay_beta0=ddpg_params['prioritized_replay_beta0'],
+                  prioritized_replay_beta_iters=ddpg_params['prioritized_replay_beta_iters'],
+                  prioritized_replay_eps=ddpg_params['prioritized_replay_eps'],
+                  use_huber_loss=ddpg_params['use_huber_loss'],
+                  reuse=reuse)
     return policy
 
 

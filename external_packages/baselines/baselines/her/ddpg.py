@@ -12,7 +12,6 @@ from baselines.her.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common import tf_util
 from baselines.common.schedules import LinearSchedule
-import baselines.common.tf_util as U
 
 
 def dims_to_shapes(input_dims):
@@ -28,7 +27,7 @@ class DDPG(object):
                  aux_loss_weight, sample_transitions, gamma, use_per, total_timesteps,
                  prioritized_replay_alpha, prioritized_replay_beta0,
                  prioritized_replay_beta_iters, prioritized_replay_eps, use_huber_loss,
-                 reuse=False, **kwargs):
+                 reuse=False):
         """
         Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
         Added functionality to use demonstrations for training to overcome exploration problem.
@@ -68,7 +67,8 @@ class DDPG(object):
         :param reuse: (boolean) whether or not the networks should be reused
         :param prioritized_replay_alpha: (float) alpha parameter for prioritized replay buffer
         :param prioritized_replay_beta0: (float) initial value of beta for prioritized replay buffer
-        :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial value
+        :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial
+        value
         to 1.0. If set to None equals to total_timesteps.
         :param prioritized_replay_eps: (float) epsilon to add to the TD errors when updating priorities
         :param use_huber_loss: (boolean)
@@ -177,7 +177,8 @@ class DDPG(object):
             self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
             if self.bc_loss:
                 # Initialize the demo buffer in the same way as the primary data buffer
-                self.demo_buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
+                self.demo_buffer = ReplayBuffer(buffer_shapes, self.buffer_size,
+                                                self.time_horizon, self.sample_transitions)
 
         self.episode_idxs = np.zeros(self.batch_size, dtype=np.int64)
         self.t_samples = np.zeros(self.batch_size, dtype=np.int64)
@@ -237,13 +238,14 @@ class DDPG(object):
 
     def init_demo_buffer(self, demo_data_file, update_stats=True):  # function that initializes the demo buffer
 
-        demoData = np.load(demo_data_file)  # load the demonstration data from data file
+        demo_data = np.load(demo_data_file)  # load the demonstration data from data file
         info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32)
+                       for key in info_keys]
 
-        demo_data_obs = demoData['obs']
-        demo_data_acs = demoData['acs']
-        demo_data_info = demoData['info']
+        demo_data_obs = demo_data['obs']
+        demo_data_acs = demo_data['acs']
+        demo_data_info = demo_data['info']
 
         # Initializing the whole demo buffer at the start of the training
         for epsd in range(self.num_demo):
@@ -278,7 +280,7 @@ class DDPG(object):
                 episode['ag_2'] = episode['ag'][:, 1:, :]
                 num_normalizing_transitions = transitions_in_episode_batch(episode)
                 if self.use_per:
-                    transitions, _ = self.buffer.sample_uniformly(episode, num_normalizing_transitions)
+                    transitions, _ = PrioritizedReplayBuffer.sample_uniformly(episode, num_normalizing_transitions)
                 else:
                     transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
@@ -309,7 +311,7 @@ class DDPG(object):
             episode['ag_2'] = episode['ag'][:, 1:, :]
             num_normalizing_transitions = transitions_in_episode_batch(episode)
             if self.use_per:
-                transitions, _ = self.buffer.sample_uniformly(episode, num_normalizing_transitions)
+                transitions, _ = PrioritizedReplayBuffer.sample_uniformly(episode, num_normalizing_transitions)
             else:
                 transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
@@ -324,8 +326,6 @@ class DDPG(object):
             self.g_stats.recompute_stats()
 
     def sample_batch(self, time_step=None):
-        weights = np.zeros(self.batch_size)
-        weights_for_bc = np.zeros(self.batch_size)
         if self.use_per:
             if self.bc_loss:  # use demonstration buffer to sample
                 transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size,
@@ -337,10 +337,10 @@ class DDPG(object):
                 episode_idxs_for_bc, t_samples_for_bc, weights_for_bc, idxes_for_bc = extra_info
 
                 for k, values in transitions_demo.items():
-                    rolloutV = transitions[k].tolist()
+                    rollout_v = transitions[k].tolist()
                     for v in values:
-                        rolloutV.append(v.tolist())
-                    transitions[k] = np.array(rolloutV)
+                        rollout_v.append(v.tolist())
+                    transitions[k] = np.array(rollout_v)
 
                 episode_idxs = np.concatenate((episode_idxs, episode_idxs_for_bc), axis=0)
                 t_samples = np.concatenate((t_samples, t_samples_for_bc), axis=0)
@@ -359,10 +359,10 @@ class DDPG(object):
                 episode_idxs_1, t_samples_1 = extra_info
 
                 for k, values in transitions_demo.items():
-                    rolloutV = transitions[k].tolist()
+                    rollout_v = transitions[k].tolist()
                     for v in values:
-                        rolloutV.append(v.tolist())
-                    transitions[k] = np.array(rolloutV)
+                        rollout_v.append(v.tolist())
+                    transitions[k] = np.array(rollout_v)
 
                 episode_idxs = np.concatenate((episode_idxs, episode_idxs_1), axis=0)
                 t_samples = np.concatenate((t_samples, t_samples_1), axis=0)
@@ -379,6 +379,17 @@ class DDPG(object):
         transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
 
         return transitions_batch, extra_info
+
+    def fake_train(self, batch=None, time_step=None):
+        # TUNG: for unit test
+        if batch is None:
+            # Don't get important weight `weights` here since it is already included in `batch`
+            batch, extra_info = self.sample_batch(time_step=time_step)
+            self.episode_idxs, self.t_samples = extra_info[:2]
+            if self.use_per:
+                self.important_weight_idxes = extra_info[3]
+                if self.bc_loss:
+                    self.important_weight_idxes_for_bc = extra_info[5]
 
     def stage_batch(self, batch=None, time_step=None):
         if batch is None:
@@ -496,12 +507,12 @@ class DDPG(object):
         assert len(self._vars("main")) == len(self._vars("target"))
 
         # loss functions
-        target_Q_pi_tf = self.target.Q_pi_tf
+        target_q_pi_tf = self.target.Q_pi_tf
         clip_range = (-self.clip_return, 0. if self.clip_pos_returns else np.inf)
-        target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_Q_pi_tf, *clip_range)
+        target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_q_pi_tf, *clip_range)
         self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
         if self.use_huber_loss:
-            errors = U.huber_loss(self.td_error_tf)
+            errors = tf_util.huber_loss(self.td_error_tf)
         else:
             errors = tf.square(self.td_error_tf)
 
@@ -515,12 +526,12 @@ class DDPG(object):
 
             if self.bc_loss == 1 and self.q_filter == 1:
                 # Choosing samples where the demonstrator's action better than actor's action according to the critic
-                maskMain = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1])
+                mask_main = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1])
                 # define the cloning loss on the actor's actions only on the samples which adhere to the above masks
                 self.cloning_loss_tf = tf.reduce_sum(
                     tf.square(
-                        tf.boolean_mask(tf.boolean_mask(self.main.pi_tf, mask), maskMain, axis=0) -
-                        tf.boolean_mask(tf.boolean_mask(batch_tf['u'], mask), maskMain, axis=0)
+                        tf.boolean_mask(tf.boolean_mask(self.main.pi_tf, mask), mask_main, axis=0) -
+                        tf.boolean_mask(tf.boolean_mask(batch_tf['u'], mask), mask_main, axis=0)
                     )
                 )
 
@@ -528,11 +539,12 @@ class DDPG(object):
                     self.main.Q_pi_tf)  # primary loss scaled by it's respective weight prm_loss_weight
                 self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(tf.square(
                     self.main.pi_tf / self.max_u))  # L2 loss on action values scaled by the same weight prm_loss_weight
-                self.pi_loss_tf += self.aux_loss_weight * self.cloning_loss_tf  # adding the cloning loss to the actor loss as an auxilliary loss scaled by its weight aux_loss_weight
+                # adding the cloning loss to the actor loss as an auxilliary loss scaled by its weight aux_loss_weight
+                self.pi_loss_tf += self.aux_loss_weight * self.cloning_loss_tf
 
             elif self.bc_loss == 1 and self.q_filter == 0:  # train with demonstrations without q_filter
                 self.cloning_loss_tf = tf.reduce_sum(
-                    tf.square(tf.boolean_mask((self.main.pi_tf), mask) - tf.boolean_mask((batch_tf['u']), mask)))
+                    tf.square(tf.boolean_mask(self.main.pi_tf, mask) - tf.boolean_mask((batch_tf['u']), mask)))
                 self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(
                     tf.square(self.main.pi_tf / self.max_u))
@@ -542,13 +554,13 @@ class DDPG(object):
                 self.pi_loss_tf = -tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.action_l2 * tf.reduce_mean(tf.square(self.main.pi_tf / self.max_u))
 
-        Q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'))
+        q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'))
         pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
-        assert len(self._vars('main/Q')) == len(Q_grads_tf)
+        assert len(self._vars('main/Q')) == len(q_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
-        self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/Q'))
+        self.Q_grads_vars_tf = zip(q_grads_tf, self._vars('main/Q'))
         self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
-        self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/Q'))
+        self.Q_grad_tf = flatten_grads(grads=q_grads_tf, var_list=self._vars('main/Q'))
         self.pi_grad_tf = flatten_grads(grads=pi_grads_tf, var_list=self._vars('main/pi'))
 
         # optimizers
@@ -607,9 +619,9 @@ class DDPG(object):
             if k[-6:] == '_stats':
                 self.__dict__[k] = v
         # load TF variables
-        vars = [x for x in self._global_vars('') if 'buffer' not in x.name]
-        assert (len(vars) == len(state["tf"]))
-        node = [tf.assign(var, val) for var, val in zip(vars, state["tf"])]
+        vars_list = [x for x in self._global_vars('') if 'buffer' not in x.name]
+        assert (len(vars_list) == len(state["tf"]))
+        node = [tf.assign(var, val) for var, val in zip(vars_list, state["tf"])]
         self.sess.run(node)
 
     # TODO: modifying this function for continuely training policy
