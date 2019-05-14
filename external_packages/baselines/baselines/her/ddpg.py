@@ -181,9 +181,9 @@ class DDPG(object):
                                                 self.time_horizon, self.sample_transitions)
 
         self.episode_idxs = np.zeros(self.batch_size, dtype=np.int64)
-        self.t_samples = np.zeros(self.batch_size, dtype=np.int64)
-        self.important_weight_idxes = None
-        self.important_weight_idxes_for_bc = None
+        self.episode_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
+        self.transition_idxs = np.zeros(self.batch_size, dtype=np.int64)
+        self.transition_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
 
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
@@ -328,13 +328,14 @@ class DDPG(object):
     def sample_batch(self, time_step=None):
         if self.use_per:
             if self.bc_loss:  # use demonstration buffer to sample
+                # extra_infor: [episode_idxs, transition_idxs, weights]
                 transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size,
                                                              beta=self.beta_schedule.value(time_step))
-                episode_idxs, t_samples, weights, idxes = extra_info
+                episode_idxs, transition_idxs, weights = extra_info
 
-                transitions_demo, extra_info = self.demo_buffer.sample(self.demo_batch_size,
+                transitions_demo, extra_info_demo = self.demo_buffer.sample(self.demo_batch_size,
                                                                        beta=self.beta_schedule.value(time_step))
-                episode_idxs_for_bc, t_samples_for_bc, weights_for_bc, idxes_for_bc = extra_info
+                episode_idxs_for_bc, transition_idxs_for_bc, weights_for_bc = extra_info_demo
 
                 for k, values in transitions_demo.items():
                     rollout_v = transitions[k].tolist()
@@ -342,9 +343,7 @@ class DDPG(object):
                         rollout_v.append(v.tolist())
                     transitions[k] = np.array(rollout_v)
 
-                episode_idxs = np.concatenate((episode_idxs, episode_idxs_for_bc), axis=0)
-                t_samples = np.concatenate((t_samples, t_samples_for_bc), axis=0)
-                extra_info = [episode_idxs, t_samples, weights, idxes, weights_for_bc, idxes_for_bc]
+                extra_info = extra_info + extra_info_demo
                 transitions['important_weight'] = np.concatenate((weights, weights_for_bc), axis=0)
             else:
                 transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step))
@@ -385,21 +384,23 @@ class DDPG(object):
         if batch is None:
             # Don't get important weight `weights` here since it is already included in `batch`
             batch, extra_info = self.sample_batch(time_step=time_step)
-            self.episode_idxs, self.t_samples = extra_info[:2]
             if self.use_per:
-                self.important_weight_idxes = extra_info[3]
+                self.episode_idxs = extra_info[0]
+                self.transition_idxs = extra_info[1]
                 if self.bc_loss:
-                    self.important_weight_idxes_for_bc = extra_info[5]
+                    self.episode_idxs_for_bc = extra_info[3]
+                    self.transition_idxs_for_bc = extra_info[4]
 
     def stage_batch(self, batch=None, time_step=None):
         if batch is None:
             # Don't get important weight `weights` here since it is already included in `batch`
             batch, extra_info = self.sample_batch(time_step=time_step)
-            self.episode_idxs, self.t_samples = extra_info[:2]
             if self.use_per:
-                self.important_weight_idxes = extra_info[3]
+                self.episode_idxs = extra_info[0]
+                self.transition_idxs = extra_info[1]
                 if self.bc_loss:
-                    self.important_weight_idxes_for_bc = extra_info[5]
+                    self.episode_idxs_for_bc = extra_info[3]
+                    self.transition_idxs_for_bc = extra_info[4]
 
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
@@ -407,7 +408,6 @@ class DDPG(object):
     def train(self, stage=True, time_step=None):
         if stage:
             self.stage_batch(time_step=time_step)
-
         if self.bc_loss == 1:
             td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad = self._grads()
             self._update(q_grad, pi_grad)
