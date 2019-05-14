@@ -10,7 +10,7 @@ from mujoco_py import MujocoException
 class RolloutWorker:
     def __init__(self, make_env, policy, dims, logger, time_horizon, rollout_batch_size=1,
                  exploit=False, use_target_net=False, compute_q=False, noise_eps=0,
-                 random_eps=0, history_len=100, render=False, **kwargs):
+                 random_eps=0, history_len=100, render=False):
         """
         Rollout worker generates experience by interacting with one or many environments.
 
