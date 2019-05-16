@@ -75,7 +75,7 @@ class DDPG(object):
         """
 
         self.input_dims = input_dims
-        self.buffer_size = buffer_size
+        self.buffer_size = (buffer_size // rollout_batch_size) * rollout_batch_size
         self.hidden = hidden
         self.layers = layers
         self.network_class = network_class
@@ -119,10 +119,10 @@ class DDPG(object):
 
         input_shapes = dims_to_shapes(self.input_dims)
         self.dimo = self.input_dims['o']
-        self.dimu = self.input_dims['u']
         self.dimg = self.input_dims['g']
+        self.dimu = self.input_dims['u']
 
-        # Prepare staging area for feeding data to the model
+        # Prepare staging area for feeding data to the model.
         stage_shapes = OrderedDict()
         for key in sorted(self.input_dims.keys()):
             if key.startswith('info_'):
@@ -134,23 +134,25 @@ class DDPG(object):
         stage_shapes['important_weight'] = (None,)
         self.stage_shapes = stage_shapes
 
-        # Create network
+        # Create network.
         with tf.variable_scope(self.scope):
             self.staging_tf = StagingArea(
                 dtypes=[tf.float32 for _ in self.stage_shapes.keys()],
                 shapes=list(self.stage_shapes.values()))
             self.buffer_ph_tf = [
                 tf.placeholder(tf.float32, shape=shape) for shape in self.stage_shapes.values()]
-
             self.stage_op = self.staging_tf.put(self.buffer_ph_tf)
 
             self._create_network(reuse=reuse)
 
-        # Configure the replay buffer
-        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1,
-                               *input_shapes[key])
+        # Configure the replay buffer.
+        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1, *input_shapes[key])
                          for key, val in input_shapes.items()}
+        # buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        #                  for key, val in input_shapes.items()}
+        buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
         buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
+        # buffer_shapes['ag'] = (self.time_horizon, self.dimg)
 
         if self.use_per:
             self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
@@ -325,6 +327,47 @@ class DDPG(object):
             self.o_stats.recompute_stats()
             self.g_stats.recompute_stats()
 
+    def get_current_buffer_size(self):
+        return self.buffer.get_current_size()
+
+    def _sync_optimizers(self):
+        self.Q_adam.sync()
+        self.pi_adam.sync()
+
+    def _grads(self):
+        # Avoid feed_dict here for performance!
+        if self.bc_loss == 1:
+            td_error, critic_loss, actor_loss, q_grad, pi_grad, cloning_loss = self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+                self.cloning_loss_tf
+            ])
+            return td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad
+        else:
+            td_error, critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.pi_loss_tf,
+                self.Q_grad_tf,
+                self.pi_grad_tf,
+            ])
+            return td_error, critic_loss, actor_loss, q_grad, pi_grad
+            # TUNG: test old code
+            # critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
+            #     self.Q_loss_tf,
+            #     self.pi_loss_tf,
+            #     self.Q_grad_tf,
+            #     self.pi_grad_tf,
+            # ])
+            # return critic_loss, actor_loss, q_grad, pi_grad
+
+    def _update(self, q_grad, pi_grad):
+        self.Q_adam.update(q_grad, self.q_lr)
+        self.pi_adam.update(pi_grad, self.pi_lr)
+
     def sample_batch(self, time_step=None):
         if self.use_per:
             if self.bc_loss:  # use demonstration buffer to sample
@@ -334,7 +377,7 @@ class DDPG(object):
                 episode_idxs, transition_idxs, weights = extra_info
 
                 transitions_demo, extra_info_demo = self.demo_buffer.sample(self.demo_batch_size,
-                                                                       beta=self.beta_schedule.value(time_step))
+                                                                            beta=self.beta_schedule.value(time_step))
                 episode_idxs_for_bc, transition_idxs_for_bc, weights_for_bc = extra_info_demo
 
                 for k, values in transitions_demo.items():
@@ -379,18 +422,6 @@ class DDPG(object):
 
         return transitions_batch, extra_info
 
-    def fake_train(self, batch=None, time_step=None):
-        # TUNG: for unit test
-        if batch is None:
-            # Don't get important weight `weights` here since it is already included in `batch`
-            batch, extra_info = self.sample_batch(time_step=time_step)
-            if self.use_per:
-                self.episode_idxs = extra_info[0]
-                self.transition_idxs = extra_info[1]
-                if self.bc_loss:
-                    self.episode_idxs_for_bc = extra_info[3]
-                    self.transition_idxs_for_bc = extra_info[4]
-
     def stage_batch(self, batch=None, time_step=None):
         if batch is None:
             # Don't get important weight `weights` here since it is already included in `batch`
@@ -416,39 +447,11 @@ class DDPG(object):
             td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
             self._update(q_grad, pi_grad)
             return td_error, critic_loss, actor_loss
-
-    def get_current_buffer_size(self):
-        return self.buffer.get_current_size()
-
-    def _sync_optimizers(self):
-        self.Q_adam.sync()
-        self.pi_adam.sync()
-
-    def _grads(self):
-        # Avoid feed_dict here for performance!
-        if self.bc_loss == 1:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad, cloning_loss = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
-                self.pi_loss_tf,
-                self.Q_grad_tf,
-                self.pi_grad_tf,
-                self.cloning_loss_tf
-            ])
-            return td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad
-        else:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
-                self.pi_loss_tf,
-                self.Q_grad_tf,
-                self.pi_grad_tf,
-            ])
-            return td_error, critic_loss, actor_loss, q_grad, pi_grad
-
-    def _update(self, q_grad, pi_grad):
-        self.Q_adam.update(q_grad, self.q_lr)
-        self.pi_adam.update(pi_grad, self.pi_lr)
+            # TUNG: test old code
+            # critic_loss, actor_loss, q_grad, pi_grad = self._grads()
+            # self._update(q_grad, pi_grad)
+            # td_error = np.zeros(self.batch_size)
+            # return td_error, critic_loss, actor_loss
 
     def clear_buffer(self):
         self.buffer.clear_buffer()
@@ -494,7 +497,10 @@ class DDPG(object):
         with tf.variable_scope('main') as scope:
             if reuse:
                 scope.reuse_variables()
-            self.main = self.create_actor_critic(batch_tf, net_type='main', **self.__dict__)
+            self.main = self.create_actor_critic(inputs_tf=batch_tf, dimo=self.dimo, dimg=self.dimg,
+                                                 dimu=self.dimu, max_u=self.max_u,
+                                                 o_stats=self.o_stats, g_stats=self.g_stats,
+                                                 hidden=self.hidden, layers=self.layers)
             scope.reuse_variables()
         with tf.variable_scope('target') as scope:
             if reuse:
@@ -502,28 +508,32 @@ class DDPG(object):
             target_batch_tf = batch_tf.copy()
             target_batch_tf['o'] = batch_tf['o_2']
             target_batch_tf['g'] = batch_tf['g_2']
-            self.target = self.create_actor_critic(target_batch_tf, net_type='target', **self.__dict__)
+            self.target = self.create_actor_critic(target_batch_tf, dimo=self.dimo, dimg=self.dimg,
+                                                   dimu=self.dimu, max_u=self.max_u,
+                                                   o_stats=self.o_stats, g_stats=self.g_stats,
+                                                   hidden=self.hidden, layers=self.layers)
             scope.reuse_variables()
         assert len(self._vars("main")) == len(self._vars("target"))
 
         # loss functions
         target_q_pi_tf = self.target.Q_pi_tf
         clip_range = (-self.clip_return, 0. if self.clip_pos_returns else np.inf)
-        target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_q_pi_tf, *clip_range)
-        self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
-        if self.use_huber_loss:
-            errors = tf_util.huber_loss(self.td_error_tf)
-        else:
-            errors = tf.square(self.td_error_tf)
 
-        if self.use_per:
-            self.Q_loss_tf = tf.reduce_mean(errors * batch_tf['important_weight'])
-        else:
-            self.Q_loss_tf = tf.reduce_mean(errors)
         with tf.variable_scope('loss') as scope:
             if reuse:
                 scope.reuse_variables()
 
+            # Loss for critic
+            target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_q_pi_tf, *clip_range, name='target_tf')
+            self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
+            if self.use_huber_loss:
+                errors = tf_util.huber_loss(self.td_error_tf)
+            else:
+                errors = tf.square(self.td_error_tf)
+
+            self.Q_loss_tf = tf.reduce_mean(errors * batch_tf['important_weight'])
+
+            # Loss for actor
             if self.bc_loss == 1 and self.q_filter == 1:
                 # Choosing samples where the demonstrator's action better than actor's action according to the critic
                 mask_main = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1])
@@ -532,7 +542,7 @@ class DDPG(object):
                     tf.square(
                         tf.boolean_mask(tf.boolean_mask(self.main.pi_tf, mask), mask_main, axis=0) -
                         tf.boolean_mask(tf.boolean_mask(batch_tf['u'], mask), mask_main, axis=0)
-                    )
+                    ), name='cloning_loss_tf'
                 )
 
                 self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(
@@ -544,7 +554,8 @@ class DDPG(object):
 
             elif self.bc_loss == 1 and self.q_filter == 0:  # train with demonstrations without q_filter
                 self.cloning_loss_tf = tf.reduce_sum(
-                    tf.square(tf.boolean_mask(self.main.pi_tf, mask) - tf.boolean_mask((batch_tf['u']), mask)))
+                    tf.square(tf.boolean_mask(self.main.pi_tf, mask) - tf.boolean_mask((batch_tf['u']), mask)),
+                    name='cloning_loss_tf')
                 self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(
                     tf.square(self.main.pi_tf / self.max_u))
@@ -553,9 +564,10 @@ class DDPG(object):
             else:  # If  not training with demonstrations
                 self.pi_loss_tf = -tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.action_l2 * tf.reduce_mean(tf.square(self.main.pi_tf / self.max_u))
+            scope.reuse_variables()
 
-        q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'))
-        pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
+        q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'), name='q_gradient')
+        pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'), name='pi_gradient')
         assert len(self._vars('main/Q')) == len(q_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
         self.Q_grads_vars_tf = zip(q_grads_tf, self._vars('main/Q'))
@@ -626,4 +638,4 @@ class DDPG(object):
 
     # TODO: modifying this function for continuely training policy
     def save(self, save_path):
-        tf_util.save_variables(save_path)
+        tf_util.save_variables(save_path, sess=self.sess)
