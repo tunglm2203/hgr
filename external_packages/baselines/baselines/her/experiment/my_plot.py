@@ -56,7 +56,6 @@ def pad(xs, value=np.nan):
 parser = argparse.ArgumentParser()
 parser.add_argument('--dir', type=str, nargs='+')
 parser.add_argument('--smooth', type=int, default=1)
-parser.add_argument('--log_as_epoch', action='store_true', help='Plot over epoch/time step')
 args = parser.parse_args()
 
 
@@ -79,18 +78,12 @@ for dir in directory:
         if not results:
             print('skipping {}'.format(curr_path))
             continue
-        if args.log_as_epoch:
-            print('loading {} ({})'.format(curr_path, len(results['epoch'])))
-        else:
-            print('loading {} ({})'.format(curr_path, len(results['time_step'])))
+        print('loading {} ({})'.format(curr_path, len(results['time_step'])))
         with open(os.path.join(curr_path, 'params.json'), 'r') as f:
             params = json.load(f)
 
         success_rate = np.array(results['test/success_rate'])
-        if args.log_as_epoch:
-            epoch = np.array(results['epoch']) + 1
-        else:
-            epoch = np.array(results['time_step']) + 1
+        epoch = np.array(results['time_step']) + 1
         env_id = params['env_name']
         replay_strategy = params['replay_strategy']
 

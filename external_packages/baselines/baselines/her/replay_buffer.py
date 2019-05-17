@@ -2,6 +2,8 @@ import threading
 
 import numpy as np
 from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
+import tensorflow as tf
+from scipy.stats import multinomial
 
 
 class ReplayBuffer:
@@ -118,10 +120,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha,
                  replay_strategy, replay_k, reward_fun):
         it_capacity = 1
-        # while it_capacity < size_in_transitions:
-        #     it_capacity *= 2
-        # size_in_transitions = it_capacity
-        # TUNG: Test episode priority
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
             it_capacity *= 2
@@ -147,15 +145,15 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
         self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
-        self.weight_of_episode = np.empty([self.size_in_episodes, self._length_weight])
-        self._idx_state_and_future = np.empty(self._length_weight, dtype=list)
+        self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
+        self._idx_state_and_future = np.empty(self._length_weight, dtype=list)  # Lookup table
         _idx = 0
         for i in range(self.time_horizon):
             for j in range(i, self.time_horizon):
                 self._idx_state_and_future[_idx] = [i, j + 1]
                 _idx += 1
 
-        self._max_priority = 1.0 * self._length_weight
+        self._max_priority = 1.0
 
     # def store_episode_old(self, episode_batch):
     #     """episode_batch: array(batch_size x (time_horizon or time_horizon+1) x dim_key)
@@ -328,7 +326,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_min[idx] = self._max_priority ** self._alpha
 
         # TUNG: don't correct weights in a episode
-        self.weight_of_episode[idx_ep] = np.ones((rollout_batch_size, self._length_weight))
+        self.weight_of_transition[idx_ep] = np.ones((rollout_batch_size, self._length_weight))
 
     def sample(self, batch_size, beta=0.):
         """
@@ -356,7 +354,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         episode_idxs = self._sample_proportional(batch_size)
         if max(episode_idxs) >= self.get_current_episode_size():
             print('Error')
-            import pdb; pdb.set_trace()
+            import pdb
+            pdb.set_trace()
         assert max(episode_idxs) < self.get_current_episode_size(), \
             '[AIM_ERROR]: Index is out of range: {}'.format(max(episode_idxs))
 
@@ -400,15 +399,17 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         weight_of_transitions = np.zeros(batch_size, dtype=np.float)
         for i in range(batch_size):
+            _max_weight_transition = self.weight_of_transition[episode_idxs[i]].max()
             weight_prob = \
-                self.weight_of_episode[episode_idxs[i]]/np.sum(self.weight_of_episode[episode_idxs[i]])
+                self.weight_of_transition[episode_idxs[i]]/np.sum(self.weight_of_transition[episode_idxs[i]])
 
             # Compute timestep to use by sampling with probability from weight_prob
-            _idx = np.where(np.random.multinomial(n=1, pvals=weight_prob, size=1)[0] == 1)[0][0]
+            # _idx = np.random.multinomial(n=1, pvals=weight_prob, size=1).argmax()
+            _idx = multinomial.rvs(n=1, p=weight_prob).argmax()
             transition_idxs[i] = _idx
             t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
             t_futures[i] = self._idx_state_and_future[_idx][1]  # Get index from lookup table
-            weight_of_transitions[i] = self.weight_of_episode[episode_idxs[i], _idx]
+            weight_of_transitions[i] = self.weight_of_transition[episode_idxs[i], _idx]/_max_weight_transition
 
         transitions = {key: episode_batch[key][episode_idxs, t_states].copy()
                        for key in episode_batch.keys()}
@@ -467,17 +468,32 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         :param idxes_in_ep: [int] List of indexes of sampled transitions
         """
         assert len(episode_idxs) == len(priorities) and len(episode_idxs) == len(idxes_in_ep)
-        for ep_idx, priority, transition_idx in zip(episode_idxs, priorities, idxes_in_ep):
-            assert priority > 0
+        for ep_idx, _priority_of_transition, transition_idx in zip(episode_idxs, priorities, idxes_in_ep):
+            assert _priority_of_transition > 0
             assert 0 <= ep_idx < self.get_current_episode_size()
-            # Update weight in 1 episode
-            self.weight_of_episode[ep_idx, transition_idx] = priority
+            # Update weight for transitions in 1 episode
+            self.weight_of_transition[ep_idx, transition_idx] = _priority_of_transition ** self._alpha
 
-            # Update weight for buffer (all of episodes)
-            _tmp_priority = np.sum(self.weight_of_episode[ep_idx]) ** self._alpha
-            self._it_sum[ep_idx] = _tmp_priority
-            self._it_min[ep_idx] = _tmp_priority
+            # Update weight for all episodes
+            _priority_of_episode = (np.sum(self.weight_of_transition[ep_idx]) / self.time_horizon)
+            _priority_of_episode = _priority_of_episode ** self._alpha
+            self._it_sum[ep_idx] = _priority_of_episode
+            self._it_min[ep_idx] = _priority_of_episode
 
-            self._max_priority = max(self._max_priority, _tmp_priority)
+            self._max_priority = max(self._max_priority, _priority_of_episode)
 
 
+def vmultinomial_sampling(counts, pvals, seed=None):
+    k = tf.shape(pvals)[1]
+    logits = tf.expand_dims(tf.log(pvals), 1)
+
+    def sample_single(args):
+        logits_, n_draw_ = args[0], args[1]
+        xx = tf.multinomial(logits_, n_draw_, seed)
+        indices = tf.cast(tf.reshape(xx, [-1, 1]), tf.int32)
+        updates = tf.ones(n_draw_)  # tf.shape(indices)[0]
+        return tf.scatter_nd(indices, updates, [k])
+
+    x = tf.map_fn(sample_single, [logits, counts], dtype=tf.float32)
+
+    return x

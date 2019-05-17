@@ -75,7 +75,7 @@ class DDPG(object):
         """
 
         self.input_dims = input_dims
-        self.buffer_size = (buffer_size // rollout_batch_size) * rollout_batch_size
+        self.buffer_size = ((buffer_size // time_horizon) // rollout_batch_size) * rollout_batch_size * time_horizon
         self.hidden = hidden
         self.layers = layers
         self.network_class = network_class
@@ -89,10 +89,10 @@ class DDPG(object):
         self.action_l2 = action_l2
         self.clip_obs = clip_obs
         self.scope = scope
+        self.relative_goals = relative_goals
         self.time_horizon = time_horizon
         self.rollout_batch_size = rollout_batch_size
         self.subtract_goals = subtract_goals
-        self.relative_goals = relative_goals
         self.clip_pos_returns = clip_pos_returns
         self.clip_return = clip_return
         self.bc_loss = bc_loss
@@ -109,8 +109,8 @@ class DDPG(object):
         self.prioritized_replay_beta0 = prioritized_replay_beta0
         self.prioritized_replay_beta_iters = prioritized_replay_beta_iters
         self.prioritized_replay_eps = prioritized_replay_eps
-        self.reuse = reuse
         self.use_huber_loss = use_huber_loss
+        self.reuse = reuse
 
         if self.clip_return is None:
             self.clip_return = np.inf
@@ -355,14 +355,6 @@ class DDPG(object):
                 self.pi_grad_tf,
             ])
             return td_error, critic_loss, actor_loss, q_grad, pi_grad
-            # TUNG: test old code
-            # critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
-            #     self.Q_loss_tf,
-            #     self.pi_loss_tf,
-            #     self.Q_grad_tf,
-            #     self.pi_grad_tf,
-            # ])
-            # return critic_loss, actor_loss, q_grad, pi_grad
 
     def _update(self, q_grad, pi_grad):
         self.Q_adam.update(q_grad, self.q_lr)
@@ -447,11 +439,6 @@ class DDPG(object):
             td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
             self._update(q_grad, pi_grad)
             return td_error, critic_loss, actor_loss
-            # TUNG: test old code
-            # critic_loss, actor_loss, q_grad, pi_grad = self._grads()
-            # self._update(q_grad, pi_grad)
-            # td_error = np.zeros(self.batch_size)
-            # return td_error, critic_loss, actor_loss
 
     def clear_buffer(self):
         self.buffer.clear_buffer()
@@ -636,6 +623,5 @@ class DDPG(object):
         node = [tf.assign(var, val) for var, val in zip(vars_list, state["tf"])]
         self.sess.run(node)
 
-    # TODO: modifying this function for continuely training policy
     def save(self, save_path):
         tf_util.save_variables(save_path, sess=self.sess)
