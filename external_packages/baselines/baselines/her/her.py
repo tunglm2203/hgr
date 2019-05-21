@@ -35,9 +35,6 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
           policy_save_interval, demo_file, logdir, use_per, log_interval=-1):
     if log_interval == -1:
         log_interval = n_cycles - 1
-        _log_begin_epoch = False
-    else:
-        _log_begin_epoch = True
 
     rank = MPI.COMM_WORLD.Get_rank()
 
@@ -94,7 +91,7 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
             policy.update_target_net()
 
             log_dict = {}
-            if _log_begin_epoch and cycle_idx % log_interval == 0:
+            if cycle_idx != 0 and cycle_idx % log_interval == 0:
                 evaluator.clear_history()
                 for _ in range(n_test_rollouts):
                     evaluator.generate_rollouts()
