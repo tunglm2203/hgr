@@ -63,6 +63,8 @@ directory = []
 for i in range(len(args.dir)):
     if args.dir[i][-1] == '/':
         directory.append(args.dir[i][:-1])
+    else:
+        directory.append(args.dir[i])
 # directory = ['../logs/pickplace/ap2_off_epoch_5', '../logs/pickplace/baseline', '../logs/pickplace/ap2_off_100']
 collect_data = []
 
