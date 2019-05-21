@@ -26,7 +26,9 @@ class DDPG(object):
                  bc_loss, q_filter, num_demo, demo_batch_size, prm_loss_weight,
                  aux_loss_weight, sample_transitions, gamma, use_per, total_timesteps,
                  prioritized_replay_alpha, prioritized_replay_beta0,
-                 prioritized_replay_beta_iters, prioritized_replay_eps, use_huber_loss,
+                 prioritized_replay_beta_iters, prioritized_replay_alpha_prime,
+                 prioritized_replay_beta0_prime, prioritized_replay_beta_iters_prime,
+                 prioritized_replay_eps, use_huber_loss,
                  reuse=False):
         """
         Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
@@ -108,6 +110,9 @@ class DDPG(object):
         self.prioritized_replay_alpha = prioritized_replay_alpha
         self.prioritized_replay_beta0 = prioritized_replay_beta0
         self.prioritized_replay_beta_iters = prioritized_replay_beta_iters
+        self.prioritized_replay_alpha_prime = prioritized_replay_alpha_prime
+        self.prioritized_replay_beta0_prime = prioritized_replay_beta0_prime
+        self.prioritized_replay_beta_iters_prime = prioritized_replay_beta_iters_prime
         self.prioritized_replay_eps = prioritized_replay_eps
         self.use_huber_loss = use_huber_loss
         self.reuse = reuse
@@ -157,6 +162,7 @@ class DDPG(object):
         if self.use_per:
             self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
                                                   alpha=self.prioritized_replay_alpha,
+                                                  alpha_prime=self.prioritized_replay_alpha_prime,
                                                   replay_strategy=self.sample_transitions['replay_strategy'],
                                                   replay_k=self.sample_transitions['replay_k'],
                                                   reward_fun=self.sample_transitions['reward_fun'])
@@ -164,6 +170,7 @@ class DDPG(object):
                 # Initialize the demo buffer in the same way as the primary data buffer
                 self.demo_buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
                                                            alpha=self.prioritized_replay_alpha,
+                                                           alpha_prime=self.prioritized_replay_alpha_prime,
                                                            replay_strategy=self.sample_transitions['replay_strategy'],
                                                            replay_k=self.sample_transitions['replay_k'],
                                                            reward_fun=self.sample_transitions['reward_fun'])
@@ -365,11 +372,13 @@ class DDPG(object):
             if self.bc_loss:  # use demonstration buffer to sample
                 # extra_infor: [episode_idxs, transition_idxs, weights]
                 transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size,
-                                                             beta=self.beta_schedule.value(time_step))
+                                                             beta=self.beta_schedule.value(time_step),
+                                                             beta_prime=self.beta_schedule.value(time_step))
                 episode_idxs, transition_idxs, weights = extra_info
 
                 transitions_demo, extra_info_demo = self.demo_buffer.sample(self.demo_batch_size,
-                                                                            beta=self.beta_schedule.value(time_step))
+                                                                            beta=self.beta_schedule.value(time_step),
+                                                                            beta_prime=self.beta_schedule.value(time_step))
                 episode_idxs_for_bc, transition_idxs_for_bc, weights_for_bc = extra_info_demo
 
                 for k, values in transitions_demo.items():
@@ -381,7 +390,8 @@ class DDPG(object):
                 extra_info = extra_info + extra_info_demo
                 transitions['important_weight'] = np.concatenate((weights, weights_for_bc), axis=0)
             else:
-                transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step))
+                transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step),
+                                                             beta_prime=self.beta_schedule.value(time_step))
                 weights = extra_info[2]
                 transitions['important_weight'] = weights
         else:
