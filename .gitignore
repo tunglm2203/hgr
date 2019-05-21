@@ -87,3 +87,4 @@ external_packages/baselines/baselines/her/hindsight-experience-replay
 *.html
 *.svg
 *.rst
+external_packages/stable-baselines/
