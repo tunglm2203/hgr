@@ -12,7 +12,6 @@ from baselines.her.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common import tf_util
 from baselines.common.schedules import LinearSchedule
-import baselines.common.tf_util as U
 
 
 def dims_to_shapes(input_dims):
@@ -27,8 +26,10 @@ class DDPG(object):
                  bc_loss, q_filter, num_demo, demo_batch_size, prm_loss_weight,
                  aux_loss_weight, sample_transitions, gamma, use_per, total_timesteps,
                  prioritized_replay_alpha, prioritized_replay_beta0,
-                 prioritized_replay_beta_iters, prioritized_replay_eps, use_huber_loss,
-                 reuse=False, **kwargs):
+                 prioritized_replay_beta_iters, prioritized_replay_alpha_prime,
+                 prioritized_replay_beta0_prime, prioritized_replay_beta_iters_prime,
+                 prioritized_replay_eps, use_huber_loss,
+                 reuse=False):
         """
         Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
         Added functionality to use demonstrations for training to overcome exploration problem.
@@ -68,14 +69,15 @@ class DDPG(object):
         :param reuse: (boolean) whether or not the networks should be reused
         :param prioritized_replay_alpha: (float) alpha parameter for prioritized replay buffer
         :param prioritized_replay_beta0: (float) initial value of beta for prioritized replay buffer
-        :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial value
+        :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial
+        value
         to 1.0. If set to None equals to total_timesteps.
         :param prioritized_replay_eps: (float) epsilon to add to the TD errors when updating priorities
         :param use_huber_loss: (boolean)
         """
 
         self.input_dims = input_dims
-        self.buffer_size = buffer_size
+        self.buffer_size = ((buffer_size // time_horizon) // rollout_batch_size) * rollout_batch_size * time_horizon
         self.hidden = hidden
         self.layers = layers
         self.network_class = network_class
@@ -89,10 +91,10 @@ class DDPG(object):
         self.action_l2 = action_l2
         self.clip_obs = clip_obs
         self.scope = scope
+        self.relative_goals = relative_goals
         self.time_horizon = time_horizon
         self.rollout_batch_size = rollout_batch_size
         self.subtract_goals = subtract_goals
-        self.relative_goals = relative_goals
         self.clip_pos_returns = clip_pos_returns
         self.clip_return = clip_return
         self.bc_loss = bc_loss
@@ -108,9 +110,12 @@ class DDPG(object):
         self.prioritized_replay_alpha = prioritized_replay_alpha
         self.prioritized_replay_beta0 = prioritized_replay_beta0
         self.prioritized_replay_beta_iters = prioritized_replay_beta_iters
+        self.prioritized_replay_alpha_prime = prioritized_replay_alpha_prime
+        self.prioritized_replay_beta0_prime = prioritized_replay_beta0_prime
+        self.prioritized_replay_beta_iters_prime = prioritized_replay_beta_iters_prime
         self.prioritized_replay_eps = prioritized_replay_eps
-        self.reuse = reuse
         self.use_huber_loss = use_huber_loss
+        self.reuse = reuse
 
         if self.clip_return is None:
             self.clip_return = np.inf
@@ -119,10 +124,10 @@ class DDPG(object):
 
         input_shapes = dims_to_shapes(self.input_dims)
         self.dimo = self.input_dims['o']
-        self.dimu = self.input_dims['u']
         self.dimg = self.input_dims['g']
+        self.dimu = self.input_dims['u']
 
-        # Prepare staging area for feeding data to the model
+        # Prepare staging area for feeding data to the model.
         stage_shapes = OrderedDict()
         for key in sorted(self.input_dims.keys()):
             if key.startswith('info_'):
@@ -134,27 +139,30 @@ class DDPG(object):
         stage_shapes['important_weight'] = (None,)
         self.stage_shapes = stage_shapes
 
-        # Create network
+        # Create network.
         with tf.variable_scope(self.scope):
             self.staging_tf = StagingArea(
                 dtypes=[tf.float32 for _ in self.stage_shapes.keys()],
                 shapes=list(self.stage_shapes.values()))
             self.buffer_ph_tf = [
                 tf.placeholder(tf.float32, shape=shape) for shape in self.stage_shapes.values()]
-
             self.stage_op = self.staging_tf.put(self.buffer_ph_tf)
 
             self._create_network(reuse=reuse)
 
-        # Configure the replay buffer
-        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1,
-                               *input_shapes[key])
+        # Configure the replay buffer.
+        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1, *input_shapes[key])
                          for key, val in input_shapes.items()}
+        # buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        #                  for key, val in input_shapes.items()}
+        buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
         buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
+        # buffer_shapes['ag'] = (self.time_horizon, self.dimg)
 
         if self.use_per:
             self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
                                                   alpha=self.prioritized_replay_alpha,
+                                                  alpha_prime=self.prioritized_replay_alpha_prime,
                                                   replay_strategy=self.sample_transitions['replay_strategy'],
                                                   replay_k=self.sample_transitions['replay_k'],
                                                   reward_fun=self.sample_transitions['reward_fun'])
@@ -162,6 +170,7 @@ class DDPG(object):
                 # Initialize the demo buffer in the same way as the primary data buffer
                 self.demo_buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
                                                            alpha=self.prioritized_replay_alpha,
+                                                           alpha_prime=self.prioritized_replay_alpha_prime,
                                                            replay_strategy=self.sample_transitions['replay_strategy'],
                                                            replay_k=self.sample_transitions['replay_k'],
                                                            reward_fun=self.sample_transitions['reward_fun'])
@@ -177,12 +186,13 @@ class DDPG(object):
             self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
             if self.bc_loss:
                 # Initialize the demo buffer in the same way as the primary data buffer
-                self.demo_buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
+                self.demo_buffer = ReplayBuffer(buffer_shapes, self.buffer_size,
+                                                self.time_horizon, self.sample_transitions)
 
         self.episode_idxs = np.zeros(self.batch_size, dtype=np.int64)
-        self.t_samples = np.zeros(self.batch_size, dtype=np.int64)
-        self.important_weight_idxes = None
-        self.important_weight_idxes_for_bc = None
+        self.episode_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
+        self.transition_idxs = np.zeros(self.batch_size, dtype=np.int64)
+        self.transition_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
 
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
@@ -237,13 +247,14 @@ class DDPG(object):
 
     def init_demo_buffer(self, demo_data_file, update_stats=True):  # function that initializes the demo buffer
 
-        demoData = np.load(demo_data_file)  # load the demonstration data from data file
+        demo_data = np.load(demo_data_file)  # load the demonstration data from data file
         info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32)
+                       for key in info_keys]
 
-        demo_data_obs = demoData['obs']
-        demo_data_acs = demoData['acs']
-        demo_data_info = demoData['info']
+        demo_data_obs = demo_data['obs']
+        demo_data_acs = demo_data['acs']
+        demo_data_info = demo_data['info']
 
         # Initializing the whole demo buffer at the start of the training
         for epsd in range(self.num_demo):
@@ -278,7 +289,7 @@ class DDPG(object):
                 episode['ag_2'] = episode['ag'][:, 1:, :]
                 num_normalizing_transitions = transitions_in_episode_batch(episode)
                 if self.use_per:
-                    transitions, _ = self.buffer.sample_uniformly(episode, num_normalizing_transitions)
+                    transitions, _ = PrioritizedReplayBuffer.sample_uniformly(episode, num_normalizing_transitions)
                 else:
                     transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
@@ -309,7 +320,7 @@ class DDPG(object):
             episode['ag_2'] = episode['ag'][:, 1:, :]
             num_normalizing_transitions = transitions_in_episode_batch(episode)
             if self.use_per:
-                transitions, _ = self.buffer.sample_uniformly(episode, num_normalizing_transitions)
+                transitions, _ = PrioritizedReplayBuffer.sample_uniformly(episode, num_normalizing_transitions)
             else:
                 transitions, _ = self.sample_transitions(episode, num_normalizing_transitions)
 
@@ -322,89 +333,6 @@ class DDPG(object):
 
             self.o_stats.recompute_stats()
             self.g_stats.recompute_stats()
-
-    def sample_batch(self, time_step=None):
-        weights = np.zeros(self.batch_size)
-        weights_for_bc = np.zeros(self.batch_size)
-        if self.use_per:
-            if self.bc_loss:  # use demonstration buffer to sample
-                transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size,
-                                                             beta=self.beta_schedule.value(time_step))
-                episode_idxs, t_samples, weights, idxes = extra_info
-
-                transitions_demo, extra_info = self.demo_buffer.sample(self.demo_batch_size,
-                                                                       beta=self.beta_schedule.value(time_step))
-                episode_idxs_for_bc, t_samples_for_bc, weights_for_bc, idxes_for_bc = extra_info
-
-                for k, values in transitions_demo.items():
-                    rolloutV = transitions[k].tolist()
-                    for v in values:
-                        rolloutV.append(v.tolist())
-                    transitions[k] = np.array(rolloutV)
-
-                episode_idxs = np.concatenate((episode_idxs, episode_idxs_for_bc), axis=0)
-                t_samples = np.concatenate((t_samples, t_samples_for_bc), axis=0)
-                extra_info = [episode_idxs, t_samples, weights, idxes, weights_for_bc, idxes_for_bc]
-                transitions['important_weight'] = np.concatenate((weights, weights_for_bc), axis=0)
-            else:
-                transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step))
-                weights = extra_info[2]
-                transitions['important_weight'] = weights
-        else:
-            if self.bc_loss:  # use demonstration buffer to sample
-                transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size)
-                episode_idxs, t_samples = extra_info
-
-                transitions_demo, extra_info = self.demo_buffer.sample(self.demo_batch_size)
-                episode_idxs_1, t_samples_1 = extra_info
-
-                for k, values in transitions_demo.items():
-                    rolloutV = transitions[k].tolist()
-                    for v in values:
-                        rolloutV.append(v.tolist())
-                    transitions[k] = np.array(rolloutV)
-
-                episode_idxs = np.concatenate((episode_idxs, episode_idxs_1), axis=0)
-                t_samples = np.concatenate((t_samples, t_samples_1), axis=0)
-                extra_info = [episode_idxs, t_samples]
-            else:
-                transitions, extra_info = self.buffer.sample(self.batch_size)
-            transitions['important_weight'] = np.ones(self.batch_size)
-
-        o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
-        ag, ag_2 = transitions['ag'], transitions['ag_2']
-        transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
-        transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
-
-        transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
-
-        return transitions_batch, extra_info
-
-    def stage_batch(self, batch=None, time_step=None):
-        if batch is None:
-            # Don't get important weight `weights` here since it is already included in `batch`
-            batch, extra_info = self.sample_batch(time_step=time_step)
-            self.episode_idxs, self.t_samples = extra_info[:2]
-            if self.use_per:
-                self.important_weight_idxes = extra_info[3]
-                if self.bc_loss:
-                    self.important_weight_idxes_for_bc = extra_info[5]
-
-        assert len(self.buffer_ph_tf) == len(batch)
-        self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
-
-    def train(self, stage=True, time_step=None):
-        if stage:
-            self.stage_batch(time_step=time_step)
-
-        if self.bc_loss == 1:
-            td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad = self._grads()
-            self._update(q_grad, pi_grad)
-            return td_error, critic_loss, actor_loss, cloning_loss
-        else:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
-            self._update(q_grad, pi_grad)
-            return td_error, critic_loss, actor_loss
 
     def get_current_buffer_size(self):
         return self.buffer.get_current_size()
@@ -438,6 +366,89 @@ class DDPG(object):
     def _update(self, q_grad, pi_grad):
         self.Q_adam.update(q_grad, self.q_lr)
         self.pi_adam.update(pi_grad, self.pi_lr)
+
+    def sample_batch(self, time_step=None):
+        if self.use_per:
+            if self.bc_loss:  # use demonstration buffer to sample
+                # extra_infor: [episode_idxs, transition_idxs, weights]
+                transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size,
+                                                             beta=self.beta_schedule.value(time_step),
+                                                             beta_prime=self.beta_schedule.value(time_step))
+                episode_idxs, transition_idxs, weights = extra_info
+
+                transitions_demo, extra_info_demo = self.demo_buffer.sample(self.demo_batch_size,
+                                                                            beta=self.beta_schedule.value(time_step),
+                                                                            beta_prime=self.beta_schedule.value(time_step))
+                episode_idxs_for_bc, transition_idxs_for_bc, weights_for_bc = extra_info_demo
+
+                for k, values in transitions_demo.items():
+                    rollout_v = transitions[k].tolist()
+                    for v in values:
+                        rollout_v.append(v.tolist())
+                    transitions[k] = np.array(rollout_v)
+
+                extra_info = extra_info + extra_info_demo
+                transitions['important_weight'] = np.concatenate((weights, weights_for_bc), axis=0)
+            else:
+                transitions, extra_info = self.buffer.sample(self.batch_size, beta=self.beta_schedule.value(time_step),
+                                                             beta_prime=self.beta_schedule.value(time_step))
+                weights = extra_info[2]
+                transitions['important_weight'] = weights
+        else:
+            if self.bc_loss:  # use demonstration buffer to sample
+                transitions, extra_info = self.buffer.sample(self.batch_size - self.demo_batch_size)
+                episode_idxs, t_samples = extra_info
+
+                transitions_demo, extra_info = self.demo_buffer.sample(self.demo_batch_size)
+                episode_idxs_1, t_samples_1 = extra_info
+
+                for k, values in transitions_demo.items():
+                    rollout_v = transitions[k].tolist()
+                    for v in values:
+                        rollout_v.append(v.tolist())
+                    transitions[k] = np.array(rollout_v)
+
+                episode_idxs = np.concatenate((episode_idxs, episode_idxs_1), axis=0)
+                t_samples = np.concatenate((t_samples, t_samples_1), axis=0)
+                extra_info = [episode_idxs, t_samples]
+            else:
+                transitions, extra_info = self.buffer.sample(self.batch_size)
+            transitions['important_weight'] = np.ones(self.batch_size)
+
+        o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
+        ag, ag_2 = transitions['ag'], transitions['ag_2']
+        transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+        transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
+
+        transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
+
+        return transitions_batch, extra_info
+
+    def stage_batch(self, batch=None, time_step=None):
+        if batch is None:
+            # Don't get important weight `weights` here since it is already included in `batch`
+            batch, extra_info = self.sample_batch(time_step=time_step)
+            if self.use_per:
+                self.episode_idxs = extra_info[0]
+                self.transition_idxs = extra_info[1]
+                if self.bc_loss:
+                    self.episode_idxs_for_bc = extra_info[3]
+                    self.transition_idxs_for_bc = extra_info[4]
+
+        assert len(self.buffer_ph_tf) == len(batch)
+        self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
+
+    def train(self, stage=True, time_step=None):
+        if stage:
+            self.stage_batch(time_step=time_step)
+        if self.bc_loss == 1:
+            td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad = self._grads()
+            self._update(q_grad, pi_grad)
+            return td_error, critic_loss, actor_loss, cloning_loss
+        else:
+            td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
+            self._update(q_grad, pi_grad)
+            return td_error, critic_loss, actor_loss
 
     def clear_buffer(self):
         self.buffer.clear_buffer()
@@ -483,7 +494,10 @@ class DDPG(object):
         with tf.variable_scope('main') as scope:
             if reuse:
                 scope.reuse_variables()
-            self.main = self.create_actor_critic(batch_tf, net_type='main', **self.__dict__)
+            self.main = self.create_actor_critic(inputs_tf=batch_tf, dimo=self.dimo, dimg=self.dimg,
+                                                 dimu=self.dimu, max_u=self.max_u,
+                                                 o_stats=self.o_stats, g_stats=self.g_stats,
+                                                 hidden=self.hidden, layers=self.layers)
             scope.reuse_variables()
         with tf.variable_scope('target') as scope:
             if reuse:
@@ -491,48 +505,54 @@ class DDPG(object):
             target_batch_tf = batch_tf.copy()
             target_batch_tf['o'] = batch_tf['o_2']
             target_batch_tf['g'] = batch_tf['g_2']
-            self.target = self.create_actor_critic(target_batch_tf, net_type='target', **self.__dict__)
+            self.target = self.create_actor_critic(target_batch_tf, dimo=self.dimo, dimg=self.dimg,
+                                                   dimu=self.dimu, max_u=self.max_u,
+                                                   o_stats=self.o_stats, g_stats=self.g_stats,
+                                                   hidden=self.hidden, layers=self.layers)
             scope.reuse_variables()
         assert len(self._vars("main")) == len(self._vars("target"))
 
         # loss functions
-        target_Q_pi_tf = self.target.Q_pi_tf
+        target_q_pi_tf = self.target.Q_pi_tf
         clip_range = (-self.clip_return, 0. if self.clip_pos_returns else np.inf)
-        target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_Q_pi_tf, *clip_range)
-        self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
-        if self.use_huber_loss:
-            errors = U.huber_loss(self.td_error_tf)
-        else:
-            errors = tf.square(self.td_error_tf)
 
-        if self.use_per:
-            self.Q_loss_tf = tf.reduce_mean(errors * batch_tf['important_weight'])
-        else:
-            self.Q_loss_tf = tf.reduce_mean(errors)
         with tf.variable_scope('loss') as scope:
             if reuse:
                 scope.reuse_variables()
 
+            # Loss for critic
+            target_tf = tf.clip_by_value(batch_tf['r'] + self.gamma * target_q_pi_tf, *clip_range, name='target_tf')
+            self.td_error_tf = tf.stop_gradient(target_tf) - self.main.Q_tf
+            if self.use_huber_loss:
+                errors = tf_util.huber_loss(self.td_error_tf)
+            else:
+                errors = tf.square(self.td_error_tf)
+
+            self.Q_loss_tf = tf.reduce_mean(errors * batch_tf['important_weight'])
+
+            # Loss for actor
             if self.bc_loss == 1 and self.q_filter == 1:
                 # Choosing samples where the demonstrator's action better than actor's action according to the critic
-                maskMain = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1])
+                mask_main = tf.reshape(tf.boolean_mask(self.main.Q_tf > self.main.Q_pi_tf, mask), [-1])
                 # define the cloning loss on the actor's actions only on the samples which adhere to the above masks
                 self.cloning_loss_tf = tf.reduce_sum(
                     tf.square(
-                        tf.boolean_mask(tf.boolean_mask(self.main.pi_tf, mask), maskMain, axis=0) -
-                        tf.boolean_mask(tf.boolean_mask(batch_tf['u'], mask), maskMain, axis=0)
-                    )
+                        tf.boolean_mask(tf.boolean_mask(self.main.pi_tf, mask), mask_main, axis=0) -
+                        tf.boolean_mask(tf.boolean_mask(batch_tf['u'], mask), mask_main, axis=0)
+                    ), name='cloning_loss_tf'
                 )
 
                 self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(
                     self.main.Q_pi_tf)  # primary loss scaled by it's respective weight prm_loss_weight
                 self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(tf.square(
                     self.main.pi_tf / self.max_u))  # L2 loss on action values scaled by the same weight prm_loss_weight
-                self.pi_loss_tf += self.aux_loss_weight * self.cloning_loss_tf  # adding the cloning loss to the actor loss as an auxilliary loss scaled by its weight aux_loss_weight
+                # adding the cloning loss to the actor loss as an auxilliary loss scaled by its weight aux_loss_weight
+                self.pi_loss_tf += self.aux_loss_weight * self.cloning_loss_tf
 
             elif self.bc_loss == 1 and self.q_filter == 0:  # train with demonstrations without q_filter
                 self.cloning_loss_tf = tf.reduce_sum(
-                    tf.square(tf.boolean_mask((self.main.pi_tf), mask) - tf.boolean_mask((batch_tf['u']), mask)))
+                    tf.square(tf.boolean_mask(self.main.pi_tf, mask) - tf.boolean_mask((batch_tf['u']), mask)),
+                    name='cloning_loss_tf')
                 self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(
                     tf.square(self.main.pi_tf / self.max_u))
@@ -541,14 +561,15 @@ class DDPG(object):
             else:  # If  not training with demonstrations
                 self.pi_loss_tf = -tf.reduce_mean(self.main.Q_pi_tf)
                 self.pi_loss_tf += self.action_l2 * tf.reduce_mean(tf.square(self.main.pi_tf / self.max_u))
+            scope.reuse_variables()
 
-        Q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'))
-        pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'))
-        assert len(self._vars('main/Q')) == len(Q_grads_tf)
+        q_grads_tf = tf.gradients(self.Q_loss_tf, self._vars('main/Q'), name='q_gradient')
+        pi_grads_tf = tf.gradients(self.pi_loss_tf, self._vars('main/pi'), name='pi_gradient')
+        assert len(self._vars('main/Q')) == len(q_grads_tf)
         assert len(self._vars('main/pi')) == len(pi_grads_tf)
-        self.Q_grads_vars_tf = zip(Q_grads_tf, self._vars('main/Q'))
+        self.Q_grads_vars_tf = zip(q_grads_tf, self._vars('main/Q'))
         self.pi_grads_vars_tf = zip(pi_grads_tf, self._vars('main/pi'))
-        self.Q_grad_tf = flatten_grads(grads=Q_grads_tf, var_list=self._vars('main/Q'))
+        self.Q_grad_tf = flatten_grads(grads=q_grads_tf, var_list=self._vars('main/Q'))
         self.pi_grad_tf = flatten_grads(grads=pi_grads_tf, var_list=self._vars('main/pi'))
 
         # optimizers
@@ -607,11 +628,10 @@ class DDPG(object):
             if k[-6:] == '_stats':
                 self.__dict__[k] = v
         # load TF variables
-        vars = [x for x in self._global_vars('') if 'buffer' not in x.name]
-        assert (len(vars) == len(state["tf"]))
-        node = [tf.assign(var, val) for var, val in zip(vars, state["tf"])]
+        vars_list = [x for x in self._global_vars('') if 'buffer' not in x.name]
+        assert (len(vars_list) == len(state["tf"]))
+        node = [tf.assign(var, val) for var, val in zip(vars_list, state["tf"])]
         self.sess.run(node)
 
-    # TODO: modifying this function for continuely training policy
     def save(self, save_path):
-        tf_util.save_variables(save_path)
+        tf_util.save_variables(save_path, sess=self.sess)

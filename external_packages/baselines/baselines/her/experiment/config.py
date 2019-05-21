@@ -8,7 +8,7 @@ from baselines.her.her_sampler import make_sample_her_transitions
 DEFAULT_ENV_PARAMS = {
     'FetchReach-v1': {
         'n_cycles': 10,
-        'n_batches': 40,
+        'n_batches': 50,
         'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
@@ -22,13 +22,17 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.0,
+        'prioritized_replay_beta0_prime': 0.0,
+        'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+        'buffer_size': int(8E5),
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
         'n_batches': 40,
-        'rollout_batch_size': 2,
+        'rollout_batch_size': 8,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.1,
@@ -36,27 +40,62 @@ DEFAULT_ENV_PARAMS = {
 
         'bc_loss': True,
         'q_filter': True,
+        'demo_batch_size': 128,
+        'num_demo': 100,
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
-        'use_per': True,  # default: True
+        'use_per': False,  # default: True
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.0,
+        'prioritized_replay_beta0_prime': 0.0,
+        'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+        'buffer_size': int(8E5),
     },
     'FetchPush-v1': {
         'n_cycles': 50,
         'n_batches': 40,
-        'rollout_batch_size': 1,
+        'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
-        'random_eps': 0.1,
-        'noise_eps': 0.1,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
 
         'bc_loss': False,
         'q_filter': False,
+        'demo_batch_size': 128,
+        'num_demo': 100,
+        'prm_loss_weight': 0.001,
+        'aux_loss_weight': 0.0078,
+
+        'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+        'buffer_size': int(1E6),
+    },
+    'FetchSlide-v1': {
+        'n_cycles': 50,
+        'n_batches': 40,
+        'rollout_batch_size': 2,
+        'batch_size': 256,
+        'n_test_rollouts': 5,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'bc_loss': False,
+        'q_filter': False,
+        'demo_batch_size': 128,
+        'num_demo': 100,
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
@@ -64,8 +103,12 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.7,
+        'prioritized_replay_beta0_prime': 0.5,
+        'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+        'buffer_size': int(1E6),
     },
 }
 
@@ -151,7 +194,6 @@ def prepare_params(kwargs):
 
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
-    assert hasattr(tmp_env, '_max_episode_steps')
     kwargs['time_horizon'] = tmp_env.spec.max_episode_steps  # wrapped envs preserve their spec
 
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
@@ -165,7 +207,15 @@ def prepare_params(kwargs):
                  'polyak',
                  'batch_size', 'q_lr', 'pi_lr',
                  'norm_eps', 'norm_clip', 'max_u',
-                 'action_l2', 'clip_obs', 'scope', 'relative_goals']:
+                 'action_l2', 'clip_obs', 'scope', 'relative_goals',
+                 'bc_loss', 'q_filter', 'num_demo', 'demo_batch_size',
+                 'prm_loss_weight', 'aux_loss_weight',
+                 'gamma',
+                 'use_per', 'prioritized_replay_alpha', 'prioritized_replay_beta0',
+                 'prioritized_replay_beta_iters', 'prioritized_replay_eps',
+                 'prioritized_replay_alpha_prime', 'prioritized_replay_beta0_prime',
+                 'prioritized_replay_beta_iters_prime',
+                 'use_huber_loss']:
         ddpg_params[name] = kwargs[name]
         kwargs['_' + name] = kwargs[name]
         del kwargs[name]
@@ -180,6 +230,7 @@ def log_params(params, logger_input=logger):
         :param params: (dict) parameters to log
         :param logger_input: (logger) the logger
     """
+    logger_input.info('\nParamerter (param with prefix  `_` is system param, without `_` is DDPG param)\n')
     for key in sorted(params.keys()):
         logger_input.info('{}: {}'.format(key, params[key]))
 
@@ -206,7 +257,7 @@ def configure_her(params):
         params['_' + name] = her_params[name]
         del params[name]
 
-    if params['use_per']:
+    if params['_use_per']:
         sample_her_transitions = her_params
     else:
         sample_her_transitions = make_sample_her_transitions(**her_params)
@@ -225,21 +276,19 @@ def simple_goal_subtract(vec_a, vec_b):
     return vec_a - vec_b
 
 
-def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, clip_return=True):
+def configure_ddpg(dims, params, total_timesteps, reuse=False, clip_return=True):
     """
     configure a DDPG model from parameters
     :param dims: ({str: int}) the dimensions
     :param params: (dict) the DDPG parameters
     :param total_timesteps: (int) Number of time step for training, measure in transitions
     :param reuse: (bool) whether or not the networks should be reused
-    :param use_mpi: (bool) whether or not to use MPI
     :param clip_return: (float) clip returns to be in [-clip_return, clip_return]
     :return: (her.DDPG) the ddpg model
     """
     sample_her_transitions = configure_her(params)
     # Extract relevant parameters.
-    gamma = params['gamma']
-    rollout_batch_size = params['rollout_batch_size']
+    gamma = params['_gamma']
     ddpg_params = params['ddpg_params']
 
     input_dims = dims.copy()
@@ -251,29 +300,39 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, use_mpi=True, cli
                         'time_horizon': params['time_horizon'],
                         'clip_pos_returns': True,  # clip positive returns
                         'clip_return': (1. / (1. - gamma)) if clip_return else np.inf,  # max abs of return
-                        'rollout_batch_size': rollout_batch_size,
                         'subtract_goals': simple_goal_subtract,
                         'sample_transitions': sample_her_transitions,
-                        'gamma': gamma,
 
-                        'bc_loss': params['bc_loss'],
-                        'q_filter': params['q_filter'],
-                        'num_demo': params['num_demo'],
-                        'demo_batch_size': params['demo_batch_size'],
-                        'prm_loss_weight': params['prm_loss_weight'],
-                        'aux_loss_weight': params['aux_loss_weight'],
-                        'use_per': params['use_per'],
-                        'prioritized_replay_alpha': params['prioritized_replay_alpha'],
-                        'prioritized_replay_beta0': params['prioritized_replay_beta0'],
-                        'prioritized_replay_beta_iters': params['prioritized_replay_beta_iters'],
-                        'prioritized_replay_eps': params['prioritized_replay_eps'],
                         'total_timesteps': total_timesteps,
-                        'use_huber_loss': params['use_huber_loss'],
+                        'rollout_batch_size': params['rollout_batch_size'],
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],
     }
-    policy = DDPG(reuse=reuse, **ddpg_params, use_mpi=use_mpi)
+    policy = DDPG(input_dims=ddpg_params['input_dims'], buffer_size=ddpg_params['buffer_size'],
+                  hidden=ddpg_params['hidden'], layers=ddpg_params['layers'],
+                  network_class=ddpg_params['network_class'], polyak=ddpg_params['polyak'],
+                  batch_size=ddpg_params['batch_size'], q_lr=ddpg_params['q_lr'],
+                  pi_lr=ddpg_params['pi_lr'], norm_eps=ddpg_params['norm_eps'],
+                  norm_clip=ddpg_params['norm_clip'], max_u=ddpg_params['max_u'],
+                  action_l2=ddpg_params['action_l2'], clip_obs=ddpg_params['clip_obs'], scope=ddpg_params['scope'],
+                  time_horizon=ddpg_params['time_horizon'], rollout_batch_size=ddpg_params['rollout_batch_size'],
+                  subtract_goals=ddpg_params['subtract_goals'], relative_goals=ddpg_params['relative_goals'],
+                  clip_pos_returns=ddpg_params['clip_pos_returns'], clip_return=ddpg_params['clip_return'],
+                  bc_loss=ddpg_params['bc_loss'], q_filter=ddpg_params['q_filter'], num_demo=ddpg_params['num_demo'],
+                  demo_batch_size=ddpg_params['demo_batch_size'], prm_loss_weight=ddpg_params['prm_loss_weight'],
+                  aux_loss_weight=ddpg_params['aux_loss_weight'], sample_transitions=ddpg_params['sample_transitions'],
+                  gamma=ddpg_params['gamma'], use_per=ddpg_params['use_per'],
+                  total_timesteps=ddpg_params['total_timesteps'],
+                  prioritized_replay_alpha=ddpg_params['prioritized_replay_alpha'],
+                  prioritized_replay_beta0=ddpg_params['prioritized_replay_beta0'],
+                  prioritized_replay_beta_iters=ddpg_params['prioritized_replay_beta_iters'],
+                  prioritized_replay_alpha_prime=ddpg_params['prioritized_replay_alpha_prime'],
+                  prioritized_replay_beta0_prime=ddpg_params['prioritized_replay_beta0_prime'],
+                  prioritized_replay_beta_iters_prime=ddpg_params['prioritized_replay_beta_iters'],
+                  prioritized_replay_eps=ddpg_params['prioritized_replay_eps'],
+                  use_huber_loss=ddpg_params['use_huber_loss'],
+                  reuse=reuse)
     return policy
 
 

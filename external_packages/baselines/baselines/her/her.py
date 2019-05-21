@@ -14,14 +14,13 @@ from baselines.her.rollout import RolloutWorker
 
 from subprocess import CalledProcessError
 from baselines.her.util import mpi_fork
+import tensorflow as tf
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from baselines.her.my_utils import tensorboard_log
-
 import multiprocessing, logging
 
-mpl = multiprocessing.log_to_stderr()
-mpl.setLevel(logging.INFO)
+# os.environ['CUDA_VISIBLE_DEVICES']='0,1'
 
 
 def mpi_average(value):
@@ -32,9 +31,11 @@ def mpi_average(value):
     return mpi_moments(np.array(value))[0]
 
 
-def train(policy, rollout_worker, evaluator,
-          n_epochs, n_test_rollouts, n_cycles, n_batches, policy_save_interval,
-          demo_file, logdir, use_per):
+def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles, n_batches,
+          policy_save_interval, demo_file, logdir, use_per, log_interval=-1):
+    if log_interval == -1:
+        log_interval = n_cycles - 1
+
     rank = MPI.COMM_WORLD.Get_rank()
 
     tensorboard = SummaryWriter(logdir)
@@ -42,132 +43,104 @@ def train(policy, rollout_worker, evaluator,
     best_policy_path = os.path.join(logdir, 'policy_best.pkl')
     periodic_policy_path = os.path.join(logdir, 'policy_epoch_{}_cycle_{}.pkl')
 
-    logger.info("Training...")
     best_success_rate = -1
     cloning_loss = 0.
-
-    # td_error_log = {
-    #     'freq': np.zeros((n_epochs * n_cycles, 50), dtype=np.int),
-    #     'td_error': np.zeros((n_epochs * n_cycles, 50, n_epochs * n_cycles * n_batches * 10)),
-    # }
+    time_step = 0
 
     if policy.bc_loss == 1:
+        logger.info("\n[INFO] Initializing demonstration buffer...")
         policy.init_demo_buffer(demo_file)  # initialize demo buffer if training with demonstrations
 
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
+    logger.info("\n[INFO] Start training...")
     for epoch in tqdm(range(n_epochs)):
-        # train
         logger.info("\n[INFO] %s" % logdir)
         rollout_worker.clear_history()
         total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
-        for cycle_idx in range(n_cycles):
+        for cycle_idx in tqdm(range(n_cycles)):
             episode = rollout_worker.generate_rollouts()
+            time_step += rollout_worker.time_horizon * rollout_worker.rollout_batch_size
             policy.store_episode(episode)
-            # print cpname
-            cpname = multiprocessing.current_process().name
-            mpl.info("\n{}-rank{} size buffer: {}".format(cpname, rank, policy.buffer.get_current_size()))
+            # cpname = multiprocessing.current_process().name
+            # mpl.info("\n{}-rank{} size buffer: {}".format(cpname, rank, policy.buffer.get_current_size()))
 
             for _ in range(n_batches):
                 if policy.bc_loss:
-                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(
-                        time_step=policy.buffer.get_current_size())
+                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=time_step)
                 else:
-                    td_errors, critic_loss, actor_loss = policy.train(time_step=policy.buffer.get_current_size())
+                    td_errors, critic_loss, actor_loss = policy.train(time_step=time_step)
 
                 if use_per:
                     if policy.bc_loss:
                         new_priorities = np.abs(td_errors[:policy.batch_size - policy.demo_batch_size]) + \
                                          policy.prioritized_replay_eps
-                        new_priorities_for_bc = np.abs(td_errors[policy.demo_batch_size:]) + \
-                                                policy.prioritized_replay_eps
-                        policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
-                        policy.demo_buffer.update_priorities(policy.important_weight_idxes_for_bc,
-                                                             new_priorities_for_bc)
+                        new_priorities_for_bc = \
+                            np.abs(td_errors[policy.demo_batch_size:]) + policy.prioritized_replay_eps
+                        policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
+                        policy.demo_buffer.update_priorities(policy.episode_idxs_for_bc, new_priorities_for_bc,
+                                                             policy.transition_idxs_for_bc)
                     else:
                         new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
-                        policy.buffer.update_priorities(policy.important_weight_idxes, new_priorities)
+                        policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
 
                 total_q1_loss += critic_loss
                 total_pi_loss += actor_loss
                 if policy.bc_loss:
                     total_cloning_loss += cloning_loss
 
-                # # Loop for logging
-                # for idx in range(256):  # Need change to variable
-                #     td_error_log['td_error'][policy.episode_idxs[idx],
-                #                              policy.t_samples[idx],
-                #                              td_error_log['freq'][policy.episode_idxs[idx]][policy.t_samples[idx]]] \
-                #         = td_errors[idx]
-                #     td_error_log['freq'][policy.episode_idxs[idx],
-                #                          policy.t_samples[idx]] += 1
             policy.update_target_net()
 
-            # test
-            evaluator.clear_history()
-            for _ in range(n_test_rollouts):
-                evaluator.generate_rollouts()
-
-            # record logs
-            # logger.record_tabular('time_step', epoch)
-            logger.record_tabular('time_step', policy.buffer.n_transitions_stored)
             log_dict = {}
-            for key, val in evaluator.logs('test'):
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
-            for key, val in rollout_worker.logs('train'):
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
-            for key, val in policy.logs():
-                logger.record_tabular(key, mpi_average(val))
-                log_dict[key] = mpi_average(val)
-            log_dict['q1_loss'] = total_q1_loss / n_batches
-            log_dict['pi_loss'] = total_pi_loss / n_batches
-            if policy.bc_loss:
-                log_dict['cloning_loss'] = total_cloning_loss / n_batches
-            if rank == 0:
-                logger.dump_tabular()
+            if cycle_idx != 0 and cycle_idx % log_interval == 0:
+                evaluator.clear_history()
+                for _ in range(n_test_rollouts):
+                    evaluator.generate_rollouts()
 
-            # tensorboard_log(tensorboard, log_dict, epoch)
-            tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
+                logger.record_tabular('time_step', policy.buffer.n_transitions_stored)   # record logs
+                for key, val in evaluator.logs('test'):
+                    logger.record_tabular(key, mpi_average(val))
+                    log_dict[key] = mpi_average(val)
+                for key, val in rollout_worker.logs('train'):
+                    logger.record_tabular(key, mpi_average(val))
+                    log_dict[key] = mpi_average(val)
+                for key, val in policy.logs():
+                    logger.record_tabular(key, mpi_average(val))
+                    log_dict[key] = mpi_average(val)
 
-            # save the policy if it's better than the previous ones
-            success_rate = mpi_average(evaluator.current_success_rate())
-            if rank == 0 and success_rate >= best_success_rate and logdir:
-                best_success_rate = success_rate
-                logger.info(
-                    'New best success rate: {}. Saving policy to {} ...'.format(best_success_rate, best_policy_path))
-                evaluator.save_policy(best_policy_path)
-            if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and logdir:
-                policy_path = periodic_policy_path.format(epoch, cycle_idx)
-                logger.info('Saving periodic policy to {} ...'.format(policy_path))
-                evaluator.save_policy(latest_policy_path)
-                evaluator.save_policy(policy_path)
+                log_dict['q1_loss'] = total_q1_loss / n_batches
+                log_dict['pi_loss'] = total_pi_loss / n_batches
+                if policy.bc_loss:
+                    log_dict['cloning_loss'] = total_cloning_loss / n_batches
+                if rank == 0:
+                    logger.dump_tabular()
 
-            # make sure that different threads have different seeds
-            local_uniform = np.random.uniform(size=(1,))
-            root_uniform = local_uniform.copy()
-            MPI.COMM_WORLD.Bcast(root_uniform, root=0)
-            if rank != 0:
-                assert local_uniform[0] != root_uniform[0]
+                # save the policy if it's better than the previous ones
+                success_rate = mpi_average(evaluator.current_success_rate())
+                if rank == 0 and success_rate >= best_success_rate and logdir:
+                    best_success_rate = success_rate
+                    logger.info('New best success rate: {}. Saving to {} ...'.format(best_success_rate,
+                                                                                     best_policy_path))
+                    evaluator.save_policy(best_policy_path)
 
-        # with open(os.path.join(logdir, 'training_her_buffer_epoch_{}.pkl'.format(epoch)), 'wb') as f:
-        #     data = {
-        #         'sample_buf': policy.log_buf
-        #     }
-        #     pickle.dump(data, f)
-        # f.close()
-        # policy.log_buf = []
+                if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and logdir:
+                    logger.info('Saving periodic policy to {}...'.format(periodic_policy_path.format(epoch, cycle_idx)))
+                    evaluator.save_policy(latest_policy_path)
+                    evaluator.save_policy(periodic_policy_path.format(epoch, cycle_idx))
 
-    # np.savez_compressed(os.path.join(logdir, 'td_error_log'), freq=td_error_log['freq'],
-    #                     td_error=td_error_log['td_error'])
-
+                # make sure that different threads have different seeds
+                local_uniform = np.random.uniform(size=(1,))
+                root_uniform = local_uniform.copy()
+                MPI.COMM_WORLD.Bcast(root_uniform, root=0)
+                if rank != 0:
+                    assert local_uniform[0] != root_uniform[0]
+                tensorboard_log(tensorboard, log_dict, policy.buffer.n_transitions_stored)
+        policy.save(os.path.join(logdir, rollout_worker.envs[0].spec.id.split('-')[0].lower() + '_model.gz'))
     return policy
 
 
 def launch(env, logdir, n_epochs, num_cpu, seed=None,
-           replay_strategy='future', policy_save_interval=5, clip_return=True,
-           demo_file=None, override_params=None, load_path=None,
-           **kwargs):
+           replay_strategy='future', policy_save_interval=1, clip_return=True,
+           demo_file=None, override_params=None, load_path=None, log_interval=-1):
     """
     launch training with mpi
     :param env: (str) environment ID
@@ -181,6 +154,8 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     :param clip_return: (float): clip returns to be in [-clip_return, clip_return]
     :param demo_file: (str) the path to the demonstration file
     :param override_params: (dict) override any parameter for training
+    :param load_path: (str) the path to pretrained model (path/to/pretrained.gz)
+    :param log_interval: (int) Log interval, if equal to -1, saving at end of epoch
     """
     if override_params is None:
         override_params = {}
@@ -220,12 +195,10 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
         params.update(config.DEFAULT_ENV_PARAMS[env])  # merge env-specific parameters in
 
     params.update(**override_params)  # makes it possible to override any parameter
+
     with open(os.path.join(logger.get_dir(), 'params.json'), 'w') as f:
         json.dump(params, f)
     params = config.prepare_params(params)
-
-    params.update(kwargs)
-    config.log_params(params, logger_input=logger)
 
     if num_cpu == 1:
         logger.warn()
@@ -240,17 +213,28 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
         logger.warn()
 
     dims = config.configure_dims(params)
-    # TODO: Need to test with `rollout_batch_size` > 1
     total_timesteps = n_epochs * params['n_cycles'] * params['time_horizon'] * params['rollout_batch_size']
     policy = config.configure_ddpg(dims=dims, params=params, clip_return=clip_return, total_timesteps=total_timesteps)
-    if load_path is not None:
-        tf_util.load_variables(load_path)
 
-    # TODO: clean these variables not use
+    # Add ops to save and restore all the variables.
+    save_graph = tf.summary.FileWriter(logdir)
+    save_graph.add_graph(policy.sess.graph)
+
+    if load_path != '':
+        tf_util.load_variables(load_path, sess=policy.sess)
+        params['load_path'] = load_path
+
+    # Overwriting variables which are overwrited in DDPG class, command line, etc.
+    params['_buffer_size'] = policy.buffer_size
+    params['_num_cpu'] = num_cpu
+    params['_log_interval'] = log_interval
+    params['_logdir'] = logdir
+    params['_demo_file'] = demo_file
+    config.log_params(params, logger_input=logger)
+
     rollout_params = {
         'exploit': False,
         'use_target_net': False,
-        # 'use_demo_states': True,
         'compute_q': False,
         'time_horizon': params['time_horizon'],
     }
@@ -258,12 +242,11 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     eval_params = {
         'exploit': True,
         'use_target_net': params['test_with_polyak'],
-        # 'use_demo_states': False,
         'compute_q': True,
         'time_horizon': params['time_horizon'],
     }
 
-    for name in ['time_horizon', 'rollout_batch_size', 'gamma', 'noise_eps', 'random_eps']:
+    for name in ['time_horizon', 'rollout_batch_size', 'noise_eps', 'random_eps']:
         rollout_params[name] = params[name]
         eval_params[name] = params[name]
 
@@ -276,20 +259,24 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
           n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'], n_cycles=params['n_cycles'],
           n_batches=params['n_batches'], policy_save_interval=policy_save_interval,
-          demo_file=demo_file, logdir=logdir, use_per=params['use_per']
-          )
+          demo_file=demo_file, logdir=logdir, use_per=params['_use_per'],
+          log_interval=log_interval)
 
 
 parser = argparse.ArgumentParser(description='Reinforcement Learning')
 parser.add_argument('--env', type=str, default='FetchPickAndPlace-v1', help='The name of the Gym environment')
-parser.add_argument('--logdir', type=str, default='test', help='Path to save training informatiion (model, log, etc.)')
-parser.add_argument('--n_epochs', type=int, default=50, help='The number of training epochs to run')
+parser.add_argument('--logdir', type=str, default='logs/pickplace/per/profile', help='Path to save training '
+                                                                                     'information (model, log, etc.)')
+parser.add_argument('--n_epochs', type=int, default=125, help='The number of training epochs to run')
 parser.add_argument('--num_cpu', type=int, default=1, help='The number of CPU cores to use (using MPI)')
 parser.add_argument('--seed', type=int, default=0, help='Seed both the environment and the training code')
-parser.add_argument('--policy_save_interval', type=int, default=5, help='If 0 only the best & latest policy be pickled')
+parser.add_argument('--policy_save_interval', type=int, default=1, help='If 0 only the best & latest policy be pickled')
+parser.add_argument('--log_interval', type=int, default=-1, help='-1 is printing at end of epoch')
 parser.add_argument('--replay_strategy', type=str, default='future', help='"future" uses HER, "none" disables HER')
 parser.add_argument('--clip_return', action='store_false', help='Whether or not returns should be clipped')
-parser.add_argument('--demo_file', type=str, default='PATH/TO/DEMO/DATA/FILE.npz', help='Demo data file path')
+parser.add_argument('--demo_file', type=str, default='experiment/data_generation/demonstration_FetchPickAndPlace.npz',
+                    help='Demo data file path')
+parser.add_argument('--load_path', type=str, default='', help='Pretrained model path')
 # Get argument from command line
 args = parser.parse_args()
 print('--------- YOUR SETTING ---------')
@@ -309,7 +296,8 @@ def main():
            clip_return=args.clip_return,
            demo_file=args.demo_file,
            override_params=None,
-           load_path=None)
+           load_path=args.load_path,
+           log_interval=args.log_interval)
 
 
 if __name__ == '__main__':

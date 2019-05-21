@@ -3,7 +3,6 @@ import numpy as np
 
 def make_sample_her_transitions(replay_strategy, replay_k, reward_fun):
     """Creates a sample function that can be used for HER experience replay.
-
     Args:
         replay_strategy (in ['future', 'none']): the HER replay strategy; if set to 'none',
             regular DDPG experience replay is used
