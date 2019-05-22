@@ -154,9 +154,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 self._idx_state_and_future[_idx] = [i, j + 1]
                 _idx += 1
 
-        # TUNG: normalize in 1 episode
         self._max_episode_priority = 1.0
-        # self._max_episode_priority = 1.0 * self.time_horizon
         self._max_transition_priority = 1.0
 
     def store_episode(self, episode_batch):
@@ -216,15 +214,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         weight_of_episodes = []
         p_min = self._it_min.min() / self._it_sum.sum()
-        # TUNG: normalize in 1 episode
         max_weight_of_episode = (p_min * self.get_current_episode_size()) ** (-beta)
-        # max_weight_of_episode = p_min ** (-beta)
 
         for idx in episode_idxs:
             p_sample = self._it_sum[idx] / self._it_sum.sum()
-            # TUNG: normalize in 1 episode
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
-            # weight = p_sample ** (-beta)
             weight_of_episodes.append(weight / max_weight_of_episode)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 
@@ -261,7 +255,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             _max_weight_transition = \
                 (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
             weight_prob = \
-                self.weight_of_transition[episode_idxs[i]]/np.sum(self.weight_of_transition[episode_idxs[i]])
+                self.weight_of_transition[episode_idxs[i]] / self.weight_of_transition[episode_idxs[i]].sum()
 
             # Compute timestep to use by sampling with probability from weight_prob
             # _idx = np.random.multinomial(n=1, pvals=weight_prob, size=1).argmax()
@@ -269,7 +263,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             transition_idxs[i] = _idx
             t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
             t_futures[i] = self._idx_state_and_future[_idx][1]  # Get index from lookup table
-            weight_of_transitions[i] = self.weight_of_transition[episode_idxs[i], _idx]/_max_weight_transition
+            weight_of_transitions[i] = \
+                (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
+                / _max_weight_transition
 
         transitions = {key: episode_batch[key][episode_idxs, t_states].copy()
                        for key in episode_batch.keys()}
@@ -335,12 +331,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self.weight_of_transition[ep_idx, transition_idx] = _priority_of_transition ** self._alpha_prime
 
             # Update weight for all episodes
-            # _priority_of_episode = np.sum(self.weight_of_transition[ep_idx]) / self.time_horizon
-            # TUNG: normalize in 1 episode
-            _priority_of_episode = np.sum(self.weight_of_transition[ep_idx]) / self.time_horizon
-            _priority_of_episode = _priority_of_episode ** self._alpha
-            self._it_sum[ep_idx] = _priority_of_episode
-            self._it_min[ep_idx] = _priority_of_episode
+            _priority_of_episode = self.weight_of_transition[ep_idx].mean()
+            self._it_sum[ep_idx] = _priority_of_episode ** self._alpha
+            self._it_min[ep_idx] = _priority_of_episode ** self._alpha
 
             self._max_episode_priority = max(self._max_episode_priority, _priority_of_episode)
             self._max_transition_priority = max(self._max_transition_priority, _priority_of_transition)
