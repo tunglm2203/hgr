@@ -85,13 +85,12 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
                 total_q1_loss += critic_loss
                 total_pi_loss += actor_loss
-                if policy.bc_loss:
-                    total_cloning_loss += cloning_loss
+                total_cloning_loss += cloning_loss if policy.bc_loss else 0.
 
             policy.update_target_net()
 
             log_dict = {}
-            if cycle_idx != 0 and cycle_idx % log_interval == 0:
+            if (cycle_idx != 0 or epoch == 0) and cycle_idx % log_interval == 0:
                 evaluator.clear_history()
                 for _ in range(n_test_rollouts):
                     evaluator.generate_rollouts()
@@ -109,6 +108,8 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
                 log_dict['q1_loss'] = total_q1_loss / n_batches
                 log_dict['pi_loss'] = total_pi_loss / n_batches
+                log_dict['max episode priority'] = policy.buffer._max_episode_priority
+                log_dict['max transition priority'] = policy.buffer._max_transition_priority
                 if policy.bc_loss:
                     log_dict['cloning_loss'] = total_cloning_loss / n_batches
                 if rank == 0:
