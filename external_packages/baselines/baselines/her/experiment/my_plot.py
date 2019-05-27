@@ -129,8 +129,9 @@ for i in range(len(collect_data)):
             plt.plot(xs[0], np.nanmedian(ys, axis=0), label=config)
             plt.fill_between(xs[0], np.nanpercentile(ys, 25, axis=0), np.nanpercentile(ys, 75, axis=0), alpha=0.25)
         plt.title(env_id)
-        plt.xlabel('Epoch')
+        plt.xlabel('Time step')
         plt.ylabel('Median Success Rate')
+        plt.ylim([0, 1.1])
 
 # plt.legend([directory[0].split('/')[-1], directory[1].split('/')[-1], directory[2].split('/')[-1]])
 legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
