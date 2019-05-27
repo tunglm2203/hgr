@@ -213,19 +213,22 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             '[AIM_ERROR]: Index is out of range: {}'.format(max(episode_idxs))
 
         weight_of_episodes = []
-        p_min = self._it_min.min() / self._it_sum.sum()
-        max_weight_of_episode = (p_min * self.get_current_episode_size()) ** (-beta)
+        # p_min = self._it_min.min() / self._it_sum.sum()
+        # max_weight_of_episode = (p_min * self.get_current_episode_size()) ** (-beta)
 
         for idx in episode_idxs:
             p_sample = self._it_sum[idx] / self._it_sum.sum()
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
-            weight_of_episodes.append(weight / max_weight_of_episode)
+            # weight_of_episodes.append(weight / max_weight_of_episode)
+            weight_of_episodes.append(weight)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 
         # self._encode_sample returns: transitions, [weight_of_transitions, transition_idxs]
         transitions, extra_info = self._encode_sample(buffers, episode_idxs, beta_prime)
         weight_of_transitions, transition_idxs = extra_info[:2]
         weights = weight_of_episodes * weight_of_transitions
+        _max_weight = weights.max()
+        weights = weights / _max_weight
 
         # Loop for checking
         for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
@@ -252,8 +255,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         weight_of_transitions = np.zeros(batch_size, dtype=np.float)
         for i in range(batch_size):
-            _max_weight_transition = \
-                (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
+            # _max_weight_transition = \
+            #     (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
             weight_prob = \
                 self.weight_of_transition[episode_idxs[i]] / self.weight_of_transition[episode_idxs[i]].sum()
 
@@ -263,9 +266,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             transition_idxs[i] = _idx
             t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
             t_futures[i] = self._idx_state_and_future[_idx][1]  # Get index from lookup table
+            # weight_of_transitions[i] = \
+            #     (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
+            #     / _max_weight_transition
             weight_of_transitions[i] = \
-                (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
-                / _max_weight_transition
+                (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
 
         transitions = {key: episode_batch[key][episode_idxs, t_states].copy()
                        for key in episode_batch.keys()}
