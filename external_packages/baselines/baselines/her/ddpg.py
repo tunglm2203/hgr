@@ -8,7 +8,7 @@ from baselines import logger
 from baselines.her.util import (
     import_function, flatten_grads, transitions_in_episode_batch, convert_episode_to_batch_major)
 from baselines.her.normalizer import Normalizer
-from baselines.her.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+from baselines.her.replay_buffer import PrioritizedReplayBuffer, ReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
 from baselines.common import tf_util
 from baselines.common.schedules import LinearSchedule
@@ -29,6 +29,7 @@ class DDPG(object):
                  prioritized_replay_beta_iters, prioritized_replay_alpha_prime,
                  prioritized_replay_beta0_prime, prioritized_replay_beta_iters_prime,
                  prioritized_replay_eps, use_huber_loss,
+                 train_pi_interval, train_q_interval, info,
                  reuse=False):
         """
         Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
@@ -70,9 +71,9 @@ class DDPG(object):
         :param prioritized_replay_alpha: (float) alpha parameter for prioritized replay buffer
         :param prioritized_replay_beta0: (float) initial value of beta for prioritized replay buffer
         :param prioritized_replay_beta_iters: (int) number of iterations over which beta will be annealed from initial
-        value
-        to 1.0. If set to None equals to total_timesteps.
+        value to 1.0. If set to None equals to total_timesteps.
         :param prioritized_replay_eps: (float) epsilon to add to the TD errors when updating priorities
+        :param info: (str) Name of the gym environment
         :param use_huber_loss: (boolean)
         """
 
@@ -115,6 +116,9 @@ class DDPG(object):
         self.prioritized_replay_beta_iters_prime = prioritized_replay_beta_iters_prime
         self.prioritized_replay_eps = prioritized_replay_eps
         self.use_huber_loss = use_huber_loss
+        self.train_pi_interval = train_pi_interval
+        self.train_q_interval = train_q_interval
+        self.info = info
         self.reuse = reuse
 
         if self.clip_return is None:
@@ -341,31 +345,44 @@ class DDPG(object):
         self.Q_adam.sync()
         self.pi_adam.sync()
 
-    def _grads(self):
+    def _grads_pi(self):
         # Avoid feed_dict here for performance!
         if self.bc_loss == 1:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad, cloning_loss = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
+            actor_loss, pi_grad, cloning_loss = self.sess.run([
                 self.pi_loss_tf,
-                self.Q_grad_tf,
                 self.pi_grad_tf,
                 self.cloning_loss_tf
             ])
-            return td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad
+            return actor_loss, cloning_loss, pi_grad
         else:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad = self.sess.run([
-                self.td_error_tf,
-                self.Q_loss_tf,
+            actor_loss, pi_grad = self.sess.run([
                 self.pi_loss_tf,
-                self.Q_grad_tf,
                 self.pi_grad_tf,
             ])
-            return td_error, critic_loss, actor_loss, q_grad, pi_grad
+            return actor_loss, pi_grad
 
-    def _update(self, q_grad, pi_grad):
-        self.Q_adam.update(q_grad, self.q_lr)
+    def _grads_q(self):
+        # Avoid feed_dict here for performance!
+        if self.bc_loss == 1:
+            td_error, critic_loss, q_grad= self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.Q_grad_tf,
+            ])
+            return td_error, critic_loss, q_grad
+        else:
+            td_error, critic_loss, q_grad = self.sess.run([
+                self.td_error_tf,
+                self.Q_loss_tf,
+                self.Q_grad_tf,
+            ])
+            return td_error, critic_loss, q_grad
+
+    def _update_pi(self, pi_grad):
         self.pi_adam.update(pi_grad, self.pi_lr)
+
+    def _update_q(self, q_grad):
+        self.Q_adam.update(q_grad, self.q_lr)
 
     def sample_batch(self, time_step=None):
         if self.use_per:
@@ -438,16 +455,44 @@ class DDPG(object):
         assert len(self.buffer_ph_tf) == len(batch)
         self.sess.run(self.stage_op, feed_dict=dict(zip(self.buffer_ph_tf, batch)))
 
-    def train(self, stage=True, time_step=None):
-        if stage:
-            self.stage_batch(time_step=time_step)
+    def train(self, stage=True, time_step=None, train_q=True, train_pi=True):
+        # Sampling batch of data
+        batch, extra_info = self.sample_batch(time_step=time_step)
+        if self.use_per:
+            self.episode_idxs = extra_info[0]
+            self.transition_idxs = extra_info[1]
+            if self.bc_loss:
+                self.episode_idxs_for_bc = extra_info[3]
+                self.transition_idxs_for_bc = extra_info[4]
+
+        td_error, critic_loss, actor_loss, cloning_loss = 0., 0., 0., 0.
         if self.bc_loss == 1:
-            td_error, critic_loss, actor_loss, cloning_loss, q_grad, pi_grad = self._grads()
-            self._update(q_grad, pi_grad)
+            if train_q:
+                if stage:
+                    self.stage_batch(batch=batch)
+                td_error, critic_loss, q_grad = self._grads_q()
+            if train_pi:
+                if stage:
+                    self.stage_batch(batch=batch)
+                actor_loss, cloning_loss, pi_grad = self._grads_pi()
+            if train_q:
+                self._update_q(q_grad)
+            if train_pi:
+                self._update_pi(pi_grad)
             return td_error, critic_loss, actor_loss, cloning_loss
         else:
-            td_error, critic_loss, actor_loss, q_grad, pi_grad = self._grads()
-            self._update(q_grad, pi_grad)
+            if train_q:
+                if stage:
+                    self.stage_batch(batch=batch)
+                td_error, critic_loss, q_grad = self._grads_q()
+            if train_pi:
+                if stage:
+                    self.stage_batch(batch=batch)
+                actor_loss, pi_grad = self._grads_pi()
+            if train_q:
+                self._update_q(q_grad)
+            if train_pi:
+                self._update_pi(pi_grad)
             return td_error, critic_loss, actor_loss
 
     def clear_buffer(self):
@@ -622,7 +667,22 @@ class DDPG(object):
             # We don't need this for playing the policy.
             state['sample_transitions'] = None
 
-        self.__init__(**state)
+        _state = state.copy()
+        if state['use_per']:
+            _state['sample_transitions'] = {
+                'replay_strategy': None,
+                'replay_k': None,
+                'reward_fun': None
+            }
+            excluded_subnames = ['dimo', 'dimg', 'dimu', 'beta_schedule', 'episode_idxs', 'episode_idxs_for_bc',
+                                 'transition_idxs', 'transition_idxs_for_bc', 'tf']
+        else:
+            excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
+                                 'transition_idxs', 'transition_idxs_for_bc', 'tf']
+        for key in excluded_subnames:
+            del _state[key]
+
+        self.__init__(**_state)
         # set up stats (they are overwritten in __init__)
         for k, v in state.items():
             if k[-6:] == '_stats':
