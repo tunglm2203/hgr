@@ -15,28 +15,38 @@ DEFAULT_ENV_PARAMS = {
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
+        'replay_k': 4,
+
         'bc_loss': False,
         'q_filter': False,
 
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.9,
+
         'use_per': True,
-        'prioritized_replay_alpha': 0.6,
-        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_alpha': 0.7,
+        'prioritized_replay_beta0': 0.5,
         'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 0.0,
-        'prioritized_replay_beta0_prime': 0.0,
+        'prioritized_replay_alpha_prime': 0.7,
+        'prioritized_replay_beta0_prime': 0.5,
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+
         'buffer_size': int(8E5),
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 40,
         'n_batches': 40,
-        'rollout_batch_size': 8,
+        'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 5,
         'random_eps': 0.1,
         'noise_eps': 0.1,
+
+        'replay_k': 4,
 
         'bc_loss': True,
         'q_filter': True,
@@ -45,12 +55,17 @@ DEFAULT_ENV_PARAMS = {
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
-        'use_per': False,  # default: True
+        'train_q_interval': 1,  #2
+        'train_pi_interval': 1,
+
+        'polyak': 0.95,
+
+        'use_per': True,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 0.0,
-        'prioritized_replay_beta0_prime': 0.0,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
@@ -65,12 +80,19 @@ DEFAULT_ENV_PARAMS = {
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
+        'replay_k': 4,
+
         'bc_loss': False,
         'q_filter': False,
         'demo_batch_size': 128,
         'num_demo': 100,
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
+
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.9,
 
         'use_per': True,
         'prioritized_replay_alpha': 0.6,
@@ -92,6 +114,8 @@ DEFAULT_ENV_PARAMS = {
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
+        'replay_k': 4,
+
         'bc_loss': False,
         'q_filter': False,
         'demo_batch_size': 128,
@@ -99,12 +123,17 @@ DEFAULT_ENV_PARAMS = {
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
-        'use_per': False,
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.9,
+
+        'use_per': True,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 0.7,
-        'prioritized_replay_beta0_prime': 0.5,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
@@ -194,7 +223,7 @@ def prepare_params(kwargs):
 
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
-    kwargs['time_horizon'] = tmp_env.spec.max_episode_steps  # wrapped envs preserve their spec
+    kwargs['time_horizon'] = tmp_env.spec.max_episode_steps - 1  # wrapped envs preserve their spec
 
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
     kwargs['gamma'] = 1. - 1. / kwargs['time_horizon']
@@ -215,7 +244,7 @@ def prepare_params(kwargs):
                  'prioritized_replay_beta_iters', 'prioritized_replay_eps',
                  'prioritized_replay_alpha_prime', 'prioritized_replay_beta0_prime',
                  'prioritized_replay_beta_iters_prime',
-                 'use_huber_loss']:
+                 'use_huber_loss', 'train_q_interval', 'train_pi_interval']:
         ddpg_params[name] = kwargs[name]
         kwargs['_' + name] = kwargs[name]
         del kwargs[name]
@@ -332,6 +361,9 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, clip_return=True)
                   prioritized_replay_beta_iters_prime=ddpg_params['prioritized_replay_beta_iters'],
                   prioritized_replay_eps=ddpg_params['prioritized_replay_eps'],
                   use_huber_loss=ddpg_params['use_huber_loss'],
+                  train_pi_interval=ddpg_params['train_pi_interval'],
+                  train_q_interval=ddpg_params['train_q_interval'],
+                  info=ddpg_params['info'],
                   reuse=reuse)
     return policy
 
