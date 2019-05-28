@@ -163,6 +163,13 @@ class DDPG(object):
         buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
         # buffer_shapes['ag'] = (self.time_horizon, self.dimg)
 
+        if self.prioritized_replay_beta_iters is None:
+            self.prioritized_replay_beta_iters = self.total_timesteps
+
+        self.beta_schedule = LinearSchedule(schedule_timesteps=self.prioritized_replay_beta_iters,
+                                            initial_p=self.prioritized_replay_beta0,
+                                            final_p=1.0)
+
         if self.use_per:
             self.buffer = PrioritizedReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon,
                                                   alpha=self.prioritized_replay_alpha,
@@ -178,14 +185,6 @@ class DDPG(object):
                                                            replay_strategy=self.sample_transitions['replay_strategy'],
                                                            replay_k=self.sample_transitions['replay_k'],
                                                            reward_fun=self.sample_transitions['reward_fun'])
-
-            if self.prioritized_replay_beta_iters is None:
-                self.prioritized_replay_beta_iters = self.total_timesteps
-
-            self.beta_schedule = LinearSchedule(schedule_timesteps=self.prioritized_replay_beta_iters,
-                                                initial_p=self.prioritized_replay_beta0,
-                                                final_p=1.0)
-
         else:
             self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
             if self.bc_loss:
@@ -364,7 +363,7 @@ class DDPG(object):
     def _grads_q(self):
         # Avoid feed_dict here for performance!
         if self.bc_loss == 1:
-            td_error, critic_loss, q_grad= self.sess.run([
+            td_error, critic_loss, q_grad = self.sess.run([
                 self.td_error_tf,
                 self.Q_loss_tf,
                 self.Q_grad_tf,
@@ -466,6 +465,7 @@ class DDPG(object):
                 self.transition_idxs_for_bc = extra_info[4]
 
         td_error, critic_loss, actor_loss, cloning_loss = 0., 0., 0., 0.
+        q_grad, pi_grad = None, None
         if self.bc_loss == 1:
             if train_q:
                 if stage:
@@ -674,11 +674,9 @@ class DDPG(object):
                 'replay_k': None,
                 'reward_fun': None
             }
-            excluded_subnames = ['dimo', 'dimg', 'dimu', 'beta_schedule', 'episode_idxs', 'episode_idxs_for_bc',
-                                 'transition_idxs', 'transition_idxs_for_bc', 'tf']
-        else:
-            excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
-                                 'transition_idxs', 'transition_idxs_for_bc', 'tf']
+
+        excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
+                             'transition_idxs', 'transition_idxs_for_bc', 'tf']
         for key in excluded_subnames:
             del _state[key]
 

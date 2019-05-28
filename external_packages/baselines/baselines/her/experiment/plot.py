@@ -54,69 +54,88 @@ def pad(xs, value=np.nan):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dir', type=str)
+parser.add_argument('--dir', type=str, nargs='+')
 parser.add_argument('--smooth', type=int, default=1)
 args = parser.parse_args()
 
-# Load all data.
-data = {}
-paths = [os.path.abspath(os.path.join(path, '..')) for path in glob2.glob(os.path.join(args.dir, '**', 'progress.csv'))]
-for curr_path in paths:
-    if not os.path.isdir(curr_path):
-        continue
-    results = load_results(os.path.join(curr_path, 'progress.csv'))
-    if not results:
-        print('skipping {}'.format(curr_path))
-        continue
-    print('loading {} ({})'.format(curr_path, len(results['time_step'])))
-    with open(os.path.join(curr_path, 'params.json'), 'r') as f:
-        params = json.load(f)
 
-    success_rate = np.array(results['test/success_rate'])
-    epoch = np.array(results['time_step']) + 1
-    env_id = params['env_name']
-    replay_strategy = params['replay_strategy']
-
-    if replay_strategy == 'future':
-        config = 'her'
+directory = []
+for i in range(len(args.dir)):
+    if args.dir[i][-1] == '/':
+        directory.append(args.dir[i][:-1])
     else:
-        config = 'ddpg'
-    if 'Dense' in env_id:
-        config += '-dense'
-    else:
-        config += '-sparse'
-    env_id = env_id.replace('Dense', '')
+        directory.append(args.dir[i])
+# directory = ['../logs/pickplace/ap2_off_epoch_5', '../logs/pickplace/baseline', '../logs/pickplace/ap2_off_100']
+collect_data = []
 
-    # Process and smooth data.
-    assert success_rate.shape == epoch.shape
-    x = epoch
-    y = success_rate
-    if args.smooth:
-        x, y = smooth_reward_curve(epoch, success_rate)
-    assert x.shape == y.shape
 
-    if env_id not in data:
-        data[env_id] = {}
-    if config not in data[env_id]:
-        data[env_id][config] = []
-    data[env_id][config].append((x, y))
+for dir in directory:
+    args.dir = dir
+    data = {}
+    paths = [os.path.abspath(os.path.join(path, '..')) for path in glob2.glob(os.path.join(args.dir, '**', 'progress.csv'))]
+    for curr_path in paths:
+        if not os.path.isdir(curr_path):
+            continue
+        results = load_results(os.path.join(curr_path, 'progress.csv'))
+        if not results:
+            print('skipping {}'.format(curr_path))
+            continue
+        print('loading {} ({})'.format(curr_path, len(results['time_step'])))
+        with open(os.path.join(curr_path, 'params.json'), 'r') as f:
+            params = json.load(f)
+
+        success_rate = np.array(results['test/success_rate'])
+        epoch = np.array(results['time_step']) + 1
+        env_id = params['env_name']
+        replay_strategy = params['replay_strategy']
+
+        if replay_strategy == 'future':
+            config = 'her'
+        else:
+            config = 'ddpg'
+        if 'Dense' in env_id:
+            config += '-dense'
+        else:
+            config += '-sparse'
+        env_id = env_id.replace('Dense', '')
+
+        # Process and smooth data.
+        assert success_rate.shape == epoch.shape
+        x = epoch
+        y = success_rate
+        if args.smooth:
+            x, y = smooth_reward_curve(epoch, success_rate)
+        assert x.shape == y.shape
+
+        if env_id not in data:
+            data[env_id] = {}
+        if config not in data[env_id]:
+            data[env_id][config] = []
+        data[env_id][config].append((x, y))
+    collect_data.append(data)
 
 # Plot data.
-for env_id in sorted(data.keys()):
-    print('exporting {}'.format(env_id))
-    plt.clf()
+for i in range(len(collect_data)):
+    data = collect_data[i]
+    for env_id in sorted(data.keys()):
+        print('exporting {}'.format(env_id))
+        # plt.clf()
 
-    for config in sorted(data[env_id].keys()):
-        xs, ys = zip(*data[env_id][config])
-        xs, ys = pad(xs), pad(ys)
-        assert xs.shape == ys.shape
+        for config in sorted(data[env_id].keys()):
+            xs, ys = zip(*data[env_id][config])
+            xs, ys = pad(xs), pad(ys)
+            assert xs.shape == ys.shape
 
-        plt.plot(xs[0], np.nanmedian(ys, axis=0), label=config)
-        plt.fill_between(xs[0], np.nanpercentile(ys, 25, axis=0), np.nanpercentile(ys, 75, axis=0), alpha=0.25)
-    plt.title(env_id)
-    plt.xlabel('Epoch')
-    plt.ylabel('Median Success Rate')
-    plt.legend()
-    plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
+            plt.plot(xs[0], np.nanmedian(ys, axis=0), label=config)
+            plt.fill_between(xs[0], np.nanpercentile(ys, 25, axis=0), np.nanpercentile(ys, 75, axis=0), alpha=0.25)
+        plt.title(env_id)
+        plt.xlabel('Time step')
+        plt.ylabel('Median Success Rate')
+        plt.ylim([0, 1.1])
 
+# plt.legend([directory[0].split('/')[-1], directory[1].split('/')[-1], directory[2].split('/')[-1]])
+legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
+plt.legend(legend_name)
+
+plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
 plt.show()

@@ -38,11 +38,11 @@ DEFAULT_ENV_PARAMS = {
         'buffer_size': int(8E5),
     },
     'FetchPickAndPlace-v1': {
-        'n_cycles': 40,
+        'n_cycles': 20,
         'n_batches': 40,
         'rollout_batch_size': 2,
-        'batch_size': 256,
-        'n_test_rollouts': 5,
+        'batch_size': 1024,
+        'n_test_rollouts': 10,
         'random_eps': 0.1,
         'noise_eps': 0.1,
 
@@ -60,7 +60,7 @@ DEFAULT_ENV_PARAMS = {
 
         'polyak': 0.95,
 
-        'use_per': True,
+        'use_per': False,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
@@ -76,7 +76,7 @@ DEFAULT_ENV_PARAMS = {
         'n_batches': 40,
         'rollout_batch_size': 2,
         'batch_size': 256,
-        'n_test_rollouts': 5,
+        'n_test_rollouts': 10,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
@@ -92,9 +92,9 @@ DEFAULT_ENV_PARAMS = {
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
-        'polyak': 0.9,
+        'polyak': 0.95,
 
-        'use_per': True,
+        'use_per': False,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
@@ -223,7 +223,7 @@ def prepare_params(kwargs):
 
     kwargs['make_env'] = make_env
     tmp_env = cached_make_env(kwargs['make_env'])
-    kwargs['time_horizon'] = tmp_env.spec.max_episode_steps - 1  # wrapped envs preserve their spec
+    kwargs['time_horizon'] = tmp_env.spec.max_episode_steps  # wrapped envs preserve their spec
 
     kwargs['max_u'] = np.array(kwargs['max_u']) if isinstance(kwargs['max_u'], list) else kwargs['max_u']
     kwargs['gamma'] = 1. - 1. / kwargs['time_horizon']
