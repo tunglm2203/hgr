@@ -1,9 +1,8 @@
 import tensorflow as tf
-from baselines.her.util import store_args, nn
+from baselines.her.util import nn
 
 
 class ActorCritic:
-    # @store_args
     def __init__(self, inputs_tf, dimo, dimg, dimu, max_u, o_stats, g_stats, hidden, layers):
         """The actor-critic network and related training code.
 

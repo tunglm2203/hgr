@@ -18,9 +18,6 @@ import tensorflow as tf
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from baselines.her.my_utils import tensorboard_log
-import multiprocessing, logging
-
-# os.environ['CUDA_VISIBLE_DEVICES']='0,1'
 
 
 def mpi_average(value):
@@ -61,8 +58,6 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
             episode = rollout_worker.generate_rollouts()
             time_step += rollout_worker.time_horizon * rollout_worker.rollout_batch_size
             policy.store_episode(episode)
-            # cpname = multiprocessing.current_process().name
-            # mpl.info("\n{}-rank{} size buffer: {}".format(cpname, rank, policy.buffer.get_current_size()))
 
             for idx in range(n_batches):
                 train_q, train_pi = False, False
@@ -121,9 +116,6 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
                 log_dict['q1_loss'] = total_q1_loss * policy.train_q_interval / n_batches
                 log_dict['pi_loss'] = total_pi_loss * policy.train_pi_interval / n_batches
-                if use_per:
-                    log_dict['max episode priority'] = policy.buffer._max_episode_priority
-                    log_dict['max transition priority'] = policy.buffer._max_transition_priority
                 if policy.bc_loss:
                     log_dict['cloning_loss'] = total_cloning_loss / n_batches
                 if rank == 0:

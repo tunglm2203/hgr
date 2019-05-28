@@ -96,6 +96,7 @@ class RolloutWorker:
         info_values = [np.empty((self.time_horizon, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
                        for key in self.info_keys]
         q_values = []
+        done = None
         for step in range(self.time_horizon):
             policy_output = self.policy.get_actions(
                 o, ag, self.g,

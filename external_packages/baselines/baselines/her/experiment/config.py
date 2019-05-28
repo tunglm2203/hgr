@@ -55,7 +55,7 @@ DEFAULT_ENV_PARAMS = {
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
-        'train_q_interval': 1,  #2
+        'train_q_interval': 1,
         'train_pi_interval': 1,
 
         'polyak': 0.95,

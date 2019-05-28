@@ -14,7 +14,7 @@ def smooth_reward_curve(x, y):
     k = halfwidth
     xsmoo = x
     ysmoo = np.convolve(y, np.ones(2 * k + 1), mode='same') / np.convolve(np.ones_like(y), np.ones(2 * k + 1),
-        mode='same')
+                                                                          mode='same')
     return xsmoo, ysmoo
 
 
@@ -56,6 +56,7 @@ def pad(xs, value=np.nan):
 parser = argparse.ArgumentParser()
 parser.add_argument('--dir', type=str, nargs='+')
 parser.add_argument('--smooth', type=int, default=1)
+parser.add_argument('--legend', type=str, default='', nargs='+')
 args = parser.parse_args()
 
 
@@ -65,14 +66,14 @@ for i in range(len(args.dir)):
         directory.append(args.dir[i][:-1])
     else:
         directory.append(args.dir[i])
-# directory = ['../logs/pickplace/ap2_off_epoch_5', '../logs/pickplace/baseline', '../logs/pickplace/ap2_off_100']
 collect_data = []
 
 
 for dir in directory:
     args.dir = dir
     data = {}
-    paths = [os.path.abspath(os.path.join(path, '..')) for path in glob2.glob(os.path.join(args.dir, '**', 'progress.csv'))]
+    paths = [os.path.abspath(os.path.join(path, '..')) for path in glob2.glob(os.path.join(args.dir, '**',
+                                                                                           'progress.csv'))]
     for curr_path in paths:
         if not os.path.isdir(curr_path):
             continue
@@ -133,7 +134,6 @@ for i in range(len(collect_data)):
         plt.ylabel('Median Success Rate')
         plt.ylim([0, 1.1])
 
-# plt.legend([directory[0].split('/')[-1], directory[1].split('/')[-1], directory[2].split('/')[-1]])
 legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
 plt.legend(legend_name)
 

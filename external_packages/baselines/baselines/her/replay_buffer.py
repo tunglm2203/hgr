@@ -176,7 +176,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_sum[idx] = self._max_episode_priority ** self._alpha
             self._it_min[idx] = self._max_episode_priority ** self._alpha
 
-        # TUNG: don't correct weights in a episode
         self.weight_of_transition[idx_ep] = \
             (np.ones((rollout_batch_size, self._length_weight)) * self._max_transition_priority) ** self._alpha_prime
 
