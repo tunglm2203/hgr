@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m baselines.run --alg=her --env=FetchPickAndPlace-v1 --num_timesteps=1e4 --demo_file=experiment/data_generation/demonstration_FetchPickAndPlace.npz --logdir=logs/ddpg_her_baseline
