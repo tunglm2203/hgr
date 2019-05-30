@@ -39,9 +39,9 @@ DEFAULT_ENV_PARAMS = {
     },
     'FetchPickAndPlace-v1': {
         'n_cycles': 20,
-        'n_batches': 40,
+        'n_batches': 40,    # 80
         'rollout_batch_size': 2,
-        'batch_size': 1024,
+        'batch_size': 256,
         'n_test_rollouts': 10,
         'random_eps': 0.1,
         'noise_eps': 0.1,
@@ -55,12 +55,12 @@ DEFAULT_ENV_PARAMS = {
         'prm_loss_weight': 0.001,
         'aux_loss_weight': 0.0078,
 
-        'train_q_interval': 1,
+        'train_q_interval': 1,  # 2
         'train_pi_interval': 1,
 
-        'polyak': 0.95,
+        'polyak': 0.95,     # 0.9
 
-        'use_per': False,
+        'use_per': True,
         'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
@@ -73,7 +73,7 @@ DEFAULT_ENV_PARAMS = {
     },
     'FetchPush-v1': {
         'n_cycles': 50,
-        'n_batches': 40,
+        'n_batches': 40,   # 80,
         'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 10,
@@ -126,7 +126,7 @@ DEFAULT_ENV_PARAMS = {
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
-        'polyak': 0.9,
+        'polyak': 0.95,
 
         'use_per': True,
         'prioritized_replay_alpha': 0.6,
