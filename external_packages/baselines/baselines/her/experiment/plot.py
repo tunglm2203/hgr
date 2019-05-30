@@ -56,6 +56,7 @@ def pad(xs, value=np.nan):
 parser = argparse.ArgumentParser()
 parser.add_argument('--dir', type=str, nargs='+')
 parser.add_argument('--smooth', type=int, default=1)
+parser.add_argument('--range', type=int, default=-1, help='Number of transitions want to plot')
 parser.add_argument('--legend', type=str, default='', nargs='+')
 args = parser.parse_args()
 
@@ -124,6 +125,11 @@ for i in range(len(collect_data)):
 
         for config in sorted(data[env_id].keys()):
             xs, ys = zip(*data[env_id][config])
+            if args.range != -1:
+                _xs = (xs[0][:args.range], xs[1][:args.range])
+                _ys = (ys[0][:args.range], ys[1][:args.range])
+                xs = _xs
+                ys = _ys
             xs, ys = pad(xs), pad(ys)
             assert xs.shape == ys.shape
 
@@ -134,7 +140,11 @@ for i in range(len(collect_data)):
         plt.ylabel('Median Success Rate')
         plt.ylim([0, 1.1])
 
-legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
+if args.legend != '':
+    assert len(args.legend) == len(directory), "Provided legend is not match with number of directories"
+    legend_name = args.legend
+else:
+    legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
 plt.legend(legend_name)
 
 plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
