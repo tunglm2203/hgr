@@ -7,7 +7,7 @@ from scipy.stats import multinomial
 
 
 class ReplayBuffer:
-    def __init__(self, buffer_shapes=None, size_in_transitions=0, time_horizon=0, sample_transitions=None):
+    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, sample_transitions=None):
         """Creates a replay buffer.
 
         Args:
@@ -112,7 +112,6 @@ class ReplayBuffer:
 
         if inc == 1:
             idx = idx[0]
-
         return idx
 
 
