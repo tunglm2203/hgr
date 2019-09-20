@@ -155,13 +155,10 @@ class DDPG(object):
             self._create_network(reuse=reuse)
 
         # Configure the replay buffer.
-        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1, *input_shapes[key])
+        buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
                          for key, val in input_shapes.items()}
-        # buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
-        #                  for key, val in input_shapes.items()}
         buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
-        buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
-        # buffer_shapes['ag'] = (self.time_horizon, self.dimg)
+        buffer_shapes['ag'] = (self.time_horizon, self.dimg)
 
         if self.prioritized_replay_beta_iters is None:
             self.prioritized_replay_beta_iters = self.total_timesteps
@@ -252,8 +249,7 @@ class DDPG(object):
 
         demo_data = np.load(demo_data_file)  # load the demonstration data from data file
         info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32)
-                       for key in info_keys]
+        info_values = [np.empty((self.time_horizon - 1, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
 
         demo_data_obs = demo_data['obs']
         demo_data_acs = demo_data['acs']
@@ -264,15 +260,15 @@ class DDPG(object):
             obs, acts, goals, achieved_goals = [], [], [], []
             i = 0
             # This loop is necessary since demontration data might have different format with episode
-            for transition in range(self.time_horizon):
+            for transition in range(self.time_horizon - 1):
                 obs.append([demo_data_obs[epsd][transition]['observation']])
                 acts.append([demo_data_acs[epsd][transition]])
                 goals.append([demo_data_obs[epsd][transition]['desired_goal']])
                 achieved_goals.append([demo_data_obs[epsd][transition]['achieved_goal']])
                 for idx, key in enumerate(info_keys):
                     info_values[idx][transition, i] = demo_data_info[epsd][transition][key]
-            obs.append([demo_data_obs[epsd][self.time_horizon]['observation']])
-            achieved_goals.append([demo_data_obs[epsd][self.time_horizon]['achieved_goal']])
+            obs.append([demo_data_obs[epsd][self.time_horizon - 1]['observation']])
+            achieved_goals.append([demo_data_obs[epsd][self.time_horizon - 1]['achieved_goal']])
 
             episode = dict(o=obs,
                            u=acts,
@@ -319,6 +315,7 @@ class DDPG(object):
 
         # add transitions to normalizer
         if update_stats:
+            # add transitions to normalizer
             episode['o_2'] = episode['o'][:, 1:, :]
             episode['ag_2'] = episode['ag'][:, 1:, :]
             num_normalizing_transitions = transitions_in_episode_batch(episode)
@@ -442,9 +439,9 @@ class DDPG(object):
 
     def stage_batch(self, batch=None, time_step=None):
         if batch is None:
-            # Don't get important weight `weights` here since it is already included in `batch`
             batch, extra_info = self.sample_batch(time_step=time_step)
             if self.use_per:
+                # Don't get important weight `weights` here since it is already included in `batch`
                 self.episode_idxs = extra_info[0]
                 self.transition_idxs = extra_info[1]
                 if self.bc_loss:
@@ -493,7 +490,7 @@ class DDPG(object):
                 self._update_q(q_grad)
             if train_pi:
                 self._update_pi(pi_grad)
-            return td_error, critic_loss, actor_loss
+            return td_error, critic_loss, actor_loss, None
 
     def clear_buffer(self):
         self.buffer.clear_buffer()
@@ -587,11 +584,8 @@ class DDPG(object):
                     ), name='cloning_loss_tf'
                 )
 
-                self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(
-                    self.main.Q_pi_tf)  # primary loss scaled by it's respective weight prm_loss_weight
-                self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(tf.square(
-                    self.main.pi_tf / self.max_u))  # L2 loss on action values scaled by the same weight prm_loss_weight
-                # adding the cloning loss to the actor loss as an auxilliary loss scaled by its weight aux_loss_weight
+                self.pi_loss_tf = -self.prm_loss_weight * tf.reduce_mean(self.main.Q_pi_tf)
+                self.pi_loss_tf += self.prm_loss_weight * self.action_l2 * tf.reduce_mean(tf.square(self.main.pi_tf / self.max_u))
                 self.pi_loss_tf += self.aux_loss_weight * self.cloning_loss_tf
 
             elif self.bc_loss == 1 and self.q_filter == 0:  # train with demonstrations without q_filter
@@ -676,7 +670,7 @@ class DDPG(object):
             }
 
         excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
-                             'transition_idxs', 'transition_idxs_for_bc', 'tf']
+                             'transition_idxs', 'transition_idxs_for_bc', 'tf', 'beta_schedule']
         for key in excluded_subnames:
             del _state[key]
 
@@ -687,7 +681,7 @@ class DDPG(object):
                 self.__dict__[k] = v
         # load TF variables
         vars_list = [x for x in self._global_vars('') if 'buffer' not in x.name]
-        assert (len(vars_list) == len(state["tf"]))
+        assert(len(vars_list) == len(state["tf"]))
         node = [tf.assign(var, val) for var, val in zip(vars_list, state["tf"])]
         self.sess.run(node)
 

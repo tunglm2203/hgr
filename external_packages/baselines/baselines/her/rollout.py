@@ -93,7 +93,7 @@ class RolloutWorker:
 
         # generate episodes
         obs, achieved_goals, acts, goals, successes, dones = [], [], [], [], [], []
-        info_values = [np.empty((self.time_horizon, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
+        info_values = [np.empty((self.time_horizon - 1, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
                        for key in self.info_keys]
         q_values = []
         done = None
@@ -120,20 +120,24 @@ class RolloutWorker:
             success = np.zeros(self.rollout_batch_size)
             # compute new states and observations
             for batch_idx in range(self.rollout_batch_size):
-                try:
+                try:    # try for render
                     # We fully ignore the reward here because it will have to be re-computed
                     # for HER.
                     curr_o_new, _, done, info = self.envs[batch_idx].step(u[batch_idx])
-                    if 'is_success' in info:
-                        success[batch_idx] = info['is_success']
                     o_new[batch_idx] = curr_o_new['observation']
                     ag_new[batch_idx] = curr_o_new['achieved_goal']
-                    for idx, key in enumerate(self.info_keys):
-                        info_values[idx][step, batch_idx] = info[key]
+                    if 'is_success' in info:
+                        success[batch_idx] = info['is_success']
+                    if not done:
+                        for idx, key in enumerate(self.info_keys):
+                            info_values[idx][step, batch_idx] = info[key]
                     if self.render:
                         self.envs[batch_idx].render()
                 except MujocoException:
                     return self.generate_rollouts()
+
+            if done:
+                break
 
             if np.isnan(o_new).any():
                 self.logger.warn('NaN caught during rollout generation. Trying again...')

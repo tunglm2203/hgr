@@ -144,12 +144,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         #  \______50 elements_____/    \______49 elements_____/        \1 elements/
         #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
-        self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
+        # self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)    #TUNG: 18/09 -> change to H=49
+        self._length_weight = int(self.time_horizon * (self.time_horizon - 1) / 2)
         self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
         self._idx_state_and_future = np.empty(self._length_weight, dtype=list)  # Lookup table
         _idx = 0
-        for i in range(self.time_horizon):
-            for j in range(i, self.time_horizon):
+        # TUNG: 18/09 -> change to H=49
+        for i in range(self.time_horizon - 1):  # TUNG: 18/09 -> change to H=49
+            for j in range(i, self.time_horizon - 1):
                 self._idx_state_and_future[_idx] = [i, j + 1]
                 _idx += 1
 
