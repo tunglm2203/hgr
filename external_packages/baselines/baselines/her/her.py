@@ -61,27 +61,18 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
             for idx in range(n_batches):
                 train_q, train_pi = False, False
-                if policy.bc_loss:
-                    if idx % policy.train_q_interval == 0:
-                        train_q = True
-                    if idx % policy.train_pi_interval == 0:
-                        train_pi = True
-                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=time_step,
-                                                                                    train_q=train_q, train_pi=train_pi)
-                else:
-                    if idx % policy.train_q_interval == 0:
-                        train_q = True
-                    if idx % policy.train_pi_interval == 0:
-                        train_pi = True
-                    td_errors, critic_loss, actor_loss = policy.train(time_step=time_step,
-                                                                      train_q=train_q, train_pi=train_pi)
+                if idx % policy.train_q_interval == 0:
+                    train_q = True
+                if idx % policy.train_pi_interval == 0:
+                    train_pi = True
+                td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=time_step,
+                                                                                train_q=train_q, train_pi=train_pi)
 
                 if use_per and train_q:
                     if policy.bc_loss:
                         new_priorities = np.abs(td_errors[:policy.batch_size - policy.demo_batch_size]) + \
                                          policy.prioritized_replay_eps
-                        new_priorities_for_bc = \
-                            np.abs(td_errors[policy.demo_batch_size:]) + policy.prioritized_replay_eps
+                        new_priorities_for_bc = np.abs(td_errors[policy.demo_batch_size:]) + policy.prioritized_replay_eps
                         policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
                         policy.demo_buffer.update_priorities(policy.episode_idxs_for_bc, new_priorities_for_bc,
                                                              policy.transition_idxs_for_bc)
@@ -117,7 +108,7 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
                 log_dict['q1_loss'] = total_q1_loss * policy.train_q_interval / n_batches
                 log_dict['pi_loss'] = total_pi_loss * policy.train_pi_interval / n_batches
                 if policy.bc_loss:
-                    log_dict['cloning_loss'] = total_cloning_loss / n_batches
+                    log_dict['cloning_loss'] = total_cloning_loss * policy.train_pi_interval / n_batches
                 if rank == 0:
                     logger.dump_tabular()
 
