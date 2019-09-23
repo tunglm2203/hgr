@@ -530,7 +530,9 @@ class DDPG(object):
         batch_tf['r'] = tf.reshape(batch_tf['r'], [-1, 1])
 
         # Mask used to choose the demo buffer samples
-        mask = np.concatenate((np.zeros(self.batch_size - self.demo_batch_size), np.ones(self.demo_batch_size)), axis=0)
+        if self.bc_loss == 1:
+            mask = np.concatenate((np.zeros(self.batch_size - self.demo_batch_size), np.ones(self.demo_batch_size)),
+                                  axis=0)
 
         # networks
         with tf.variable_scope('main') as scope:
