@@ -118,7 +118,7 @@ class ReplayBuffer:
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
                  replay_strategy, replay_k, reward_fun):
-        it_capacity = 1
+        it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
             it_capacity *= 2
@@ -200,15 +200,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         buffers['o_2'] = buffers['o'][:, 1:, :]
         buffers['ag_2'] = buffers['ag'][:, 1:, :]
 
-        # PER: Sample from binary heap (containing indexes)
         assert beta > 0
         assert beta_prime > 0
 
+        # (1) Sampling in episode-level
         episode_idxs = self._sample_proportional(batch_size)
         if max(episode_idxs) >= self.get_current_episode_size():
             print('Error')
-            import pdb
-            pdb.set_trace()
+            import pdb; pdb.set_trace()
         assert max(episode_idxs) < self.get_current_episode_size(), \
             '[AIM_ERROR]: Index is out of range: {}'.format(max(episode_idxs))
 
@@ -223,14 +222,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             weight_of_episodes.append(weight)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 
-        # self._encode_sample returns: transitions, [weight_of_transitions, transition_idxs]
+        # (2) Sampling in transition-level
         transitions, extra_info = self._encode_sample(buffers, episode_idxs, beta_prime)
         weight_of_transitions, transition_idxs = extra_info[:2]
         weights = weight_of_episodes * weight_of_transitions
         _max_weight = weights.max()
         weights = weights / _max_weight
 
-        # Loop for checking
+        # Loop for asserting
         for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
             assert key in transitions, "key %s missing from transitions" % key
 
@@ -246,7 +245,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             res.append(idx)
         return np.array(res)
 
-    def _encode_sample(self, episode_batch, episode_idxs, beta_prime):
+    def _encode_sample(self, cur_buffer, episode_idxs, beta_prime):
         batch_size = len(episode_idxs)
 
         transition_idxs = np.zeros(batch_size, dtype=np.int64)  # composed by `t_states` & `t_futures`
@@ -261,7 +260,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 self.weight_of_transition[episode_idxs[i]] / self.weight_of_transition[episode_idxs[i]].sum()
 
             # Compute timestep to use by sampling with probability from weight_prob
-            # _idx = np.random.multinomial(n=1, pvals=weight_prob, size=1).argmax()
             _idx = multinomial.rvs(n=1, p=weight_prob).argmax()
             transition_idxs[i] = _idx
             t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
@@ -272,8 +270,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             weight_of_transitions[i] = \
                 (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
 
-        transitions = {key: episode_batch[key][episode_idxs, t_states].copy()
-                       for key in episode_batch.keys()}
+        transitions = {key: cur_buffer[key][episode_idxs, t_states].copy()
+                       for key in cur_buffer.keys()}
 
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
@@ -282,7 +280,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Replace goal with achieved goal but only for the previously-selected
         # HER transitions (as defined by her_indexes). For the other transitions,
         # keep the original goal.
-        future_ag = episode_batch['ag'][episode_idxs[her_indexes], t_futures[her_indexes]]
+        future_ag = cur_buffer['ag'][episode_idxs[her_indexes], t_futures[her_indexes]]
         transitions['g'][her_indexes] = future_ag
 
         # Reconstruct info dictionary for reward computation.
@@ -306,16 +304,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         return transitions, [weight_of_transitions, transition_idxs]
 
     @staticmethod
-    def sample_uniformly(episode_batch, batch_size_in_transitions):
-        time_horizon = episode_batch['u'].shape[1]
-        rollout_batch_size = episode_batch['u'].shape[0]
+    def sample_uniformly(cur_buffer, batch_size_in_transitions):
+        time_horizon = cur_buffer['u'].shape[1]
+        rollout_batch_size = cur_buffer['u'].shape[0]
         batch_size = batch_size_in_transitions
 
         # Select which episodes and time steps to use.
         episode_idxs = np.random.randint(0, rollout_batch_size, batch_size)
         t_samples = np.random.randint(time_horizon, size=batch_size)
-        transitions = {key: episode_batch[key][episode_idxs, t_samples].copy()
-                       for key in episode_batch.keys()}
+        transitions = {key: cur_buffer[key][episode_idxs, t_samples].copy()
+                       for key in cur_buffer.keys()}
 
         return transitions, [episode_idxs, t_samples]
 
