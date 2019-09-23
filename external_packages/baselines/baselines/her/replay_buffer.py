@@ -4,6 +4,7 @@ import numpy as np
 from baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 import tensorflow as tf
 from scipy.stats import multinomial
+import time
 
 
 class ReplayBuffer:
@@ -147,14 +148,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)    #TUNG: 18/09 -> change to H=49
         self._length_weight = int(self.time_horizon * (self.time_horizon - 1) / 2)
         self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
-        self._idx_state_and_future = np.empty(self._length_weight, dtype=list)  # Lookup table
+        self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
         _idx = 0
         # TUNG: 18/09 -> change to H=49
         for i in range(self.time_horizon - 1):  # TUNG: 18/09 -> change to H=49
             for j in range(i, self.time_horizon - 1):
-                self._idx_state_and_future[_idx] = [i, j + 1]
+                self._idx_state_and_future[_idx, 0] = i
+                self._idx_state_and_future[_idx, 1] = j + 1
                 _idx += 1
-
         self._max_episode_priority = 1.0
         self._max_transition_priority = 1.0
 
@@ -249,30 +250,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch_size = len(episode_idxs)
 
         transition_idxs = np.zeros(batch_size, dtype=np.int64)  # composed by `t_states` & `t_futures`
-        t_states = np.zeros(batch_size, dtype=np.int64)
-        t_futures = np.zeros(batch_size, dtype=np.int64)
-
-        weight_of_transitions = np.zeros(batch_size, dtype=np.float)
+        weight_prob = np.divide(self.weight_of_transition[episode_idxs],
+                                self.weight_of_transition[episode_idxs].sum(axis=1)[:, None])
         for i in range(batch_size):
-            # _max_weight_transition = \
-            #     (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
-            weight_prob = \
-                self.weight_of_transition[episode_idxs[i]] / self.weight_of_transition[episode_idxs[i]].sum()
-
-            # Compute timestep to use by sampling with probability from weight_prob
-            _idx = multinomial.rvs(n=1, p=weight_prob).argmax()
-            transition_idxs[i] = _idx
-            t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
-            t_futures[i] = self._idx_state_and_future[_idx][1]  # Get index from lookup table
-            # weight_of_transitions[i] = \
-            #     (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
-            #     / _max_weight_transition
-            weight_of_transitions[i] = \
-                (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
+            transition_idxs[i] = multinomial.rvs(n=1, p=weight_prob[i]).argmax()
+        t_states = self._idx_state_and_future[transition_idxs][:, 0]
+        t_futures = self._idx_state_and_future[transition_idxs][:, 1]
+        weight_of_transitions = (self.weight_of_transition[episode_idxs, transition_idxs] * self._length_weight) ** (-beta_prime)
 
         transitions = {key: cur_buffer[key][episode_idxs, t_states].copy()
                        for key in cur_buffer.keys()}
-
         # Select future time indexes proportional with probability future_p. These
         # will be used for HER replay by substituting in future goals.
         her_indexes = np.where(np.random.uniform(size=batch_size) < self.future_p)
