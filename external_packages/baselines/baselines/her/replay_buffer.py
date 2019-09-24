@@ -120,6 +120,7 @@ class ReplayBuffer:
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
                  replay_strategy, replay_k, reward_fun):
+        self.replay_strategy = replay_strategy
         it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
@@ -127,7 +128,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         size_in_transitions = it_capacity * time_horizon
         super(PrioritizedReplayBuffer, self).__init__(buffer_shapes, size_in_transitions, time_horizon)
 
-        if replay_strategy == 'future':
+        if replay_strategy == 'future' or replay_strategy == 'final':
             self.future_p = 1 - (1. / (1 + replay_k))
         else:  # 'replay_strategy' == 'none'
             self.future_p = 0
@@ -146,15 +147,24 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         #  \______50 elements_____/    \______49 elements_____/        \1 elements/
         #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
-        self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
-        self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
-        self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
-        _idx = 0
-        for i in range(self.time_horizon):
-            for j in range(i, self.time_horizon):
-                self._idx_state_and_future[_idx, 0] = i
-                self._idx_state_and_future[_idx, 1] = j + 1
-                _idx += 1
+        if self.replay_strategy == 'future':
+            self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
+            self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
+            self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
+            _idx = 0
+            for i in range(self.time_horizon):
+                for j in range(i, self.time_horizon):
+                    self._idx_state_and_future[_idx, 0] = i
+                    self._idx_state_and_future[_idx, 1] = j + 1
+                    _idx += 1
+        elif self.replay_strategy == 'final':
+            self._length_weight = int(self.time_horizon)
+            self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
+            self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
+            for i in range(self.time_horizon):
+                self._idx_state_and_future[i, 0] = i
+                self._idx_state_and_future[i, 1] = self.time_horizon
+
         self._max_episode_priority = 1.0
         self._max_transition_priority = 1.0
 
