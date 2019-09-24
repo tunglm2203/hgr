@@ -121,6 +121,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
                  replay_strategy, replay_k, reward_fun):
         self.replay_strategy = replay_strategy
+
         it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
@@ -141,29 +142,24 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._it_sum = SumSegmentTree(it_capacity)
         self._it_min = MinSegmentTree(it_capacity)
 
-        # size of weight_of_episode is size_in_episodes x time_horizon^2 (size_in_episodes x 2500)
-        # i-th 50 elements are i-th state combined with 50 goals from ag_1, ..., ag_49
-        # [s0||ag_1, ..., s0||ag_50], [s1||ag_2, ..., s1||ag_50], ..., [s49||ag_50]
-        #  \______50 elements_____/    \______49 elements_____/        \1 elements/
-        #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
         if self.replay_strategy == 'future':
-            self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
+            self._length_weight = int((self.time_horizon - 1) * self.time_horizon / 2)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
             self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
             _idx = 0
-            for i in range(self.time_horizon):
-                for j in range(i, self.time_horizon):
+            for i in range(self.time_horizon - 1):
+                for j in range(i, self.time_horizon - 1):
                     self._idx_state_and_future[_idx, 0] = i
                     self._idx_state_and_future[_idx, 1] = j + 1
                     _idx += 1
         elif self.replay_strategy == 'final':
-            self._length_weight = int(self.time_horizon)
+            self._length_weight = int(self.time_horizon - 1)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
             self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
-            for i in range(self.time_horizon):
+            for i in range(self.time_horizon - 1):
                 self._idx_state_and_future[i, 0] = i
-                self._idx_state_and_future[i, 1] = self.time_horizon
+                self._idx_state_and_future[i, 1] = self.time_horizon - 1
 
         self._max_episode_priority = 1.0
         self._max_transition_priority = 1.0
@@ -218,17 +214,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if max(episode_idxs) >= self.get_current_episode_size():
             print('Error')
             import pdb; pdb.set_trace()
-        assert max(episode_idxs) < self.get_current_episode_size(), \
-            '[AIM_ERROR]: Index is out of range: {}'.format(max(episode_idxs))
+        assert max(episode_idxs) < self.get_current_episode_size(), 'Index out of range: {}'.format(max(episode_idxs))
 
         weight_of_episodes = []
-        # p_min = self._it_min.min() / self._it_sum.sum()
-        # max_weight_of_episode = (p_min * self.get_current_episode_size()) ** (-beta)
-
         for idx in episode_idxs:
             p_sample = self._it_sum[idx] / self._it_sum.sum()
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
-            # weight_of_episodes.append(weight / max_weight_of_episode)
             weight_of_episodes.append(weight)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 
@@ -261,12 +252,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         transition_idxs = np.zeros(batch_size, dtype=np.int64)  # composed by `t_states` & `t_futures`
         weight_prob = np.divide(self.weight_of_transition[episode_idxs],
                                 self.weight_of_transition[episode_idxs].sum(axis=1)[:, None])
+
         for i in range(batch_size):
-            # 12/1250 ~ 10% amount number of transition pairs
-            # Equivalent with 10% of highest probability
-            _tmp = multinomial.rvs(n=1, p=weight_prob[i], size=self._n_samples)
-            _tmp = _tmp[np.random.randint(self._n_samples)]
-            transition_idxs[i] = _tmp.argmax()
+            transition_idxs[i] = multinomial.rvs(n=1, p=weight_prob[i]).argmax()
         t_states = self._idx_state_and_future[transition_idxs][:, 0]
         t_futures = self._idx_state_and_future[transition_idxs][:, 1]
         weight_of_transitions = (self.weight_of_transition[episode_idxs, transition_idxs] * self._length_weight) ** (-beta_prime)
