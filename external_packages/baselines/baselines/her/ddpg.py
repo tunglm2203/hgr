@@ -155,10 +155,10 @@ class DDPG(object):
             self._create_network(reuse=reuse)
 
         # Configure the replay buffer.
-        buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1, *input_shapes[key])
                          for key, val in input_shapes.items()}
         buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
-        buffer_shapes['ag'] = (self.time_horizon, self.dimg)
+        buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
 
         if self.prioritized_replay_beta_iters is None:
             self.prioritized_replay_beta_iters = self.total_timesteps
@@ -249,7 +249,7 @@ class DDPG(object):
 
         demo_data = np.load(demo_data_file)  # load the demonstration data from data file
         info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.time_horizon - 1, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+        info_values = [np.empty((self.time_horizon, 1, self.input_dims['info_' + key]), np.float32) for key in info_keys]
 
         demo_data_obs = demo_data['obs']
         demo_data_acs = demo_data['acs']
@@ -260,15 +260,15 @@ class DDPG(object):
             obs, acts, goals, achieved_goals = [], [], [], []
             i = 0
             # This loop is necessary since demontration data might have different format with episode
-            for transition in range(self.time_horizon - 1):
+            for transition in range(self.time_horizon):
                 obs.append([demo_data_obs[epsd][transition]['observation']])
                 acts.append([demo_data_acs[epsd][transition]])
                 goals.append([demo_data_obs[epsd][transition]['desired_goal']])
                 achieved_goals.append([demo_data_obs[epsd][transition]['achieved_goal']])
                 for idx, key in enumerate(info_keys):
                     info_values[idx][transition, i] = demo_data_info[epsd][transition][key]
-            obs.append([demo_data_obs[epsd][self.time_horizon - 1]['observation']])
-            achieved_goals.append([demo_data_obs[epsd][self.time_horizon - 1]['achieved_goal']])
+            obs.append([demo_data_obs[epsd][self.time_horizon]['observation']])
+            achieved_goals.append([demo_data_obs[epsd][self.time_horizon]['achieved_goal']])
 
             episode = dict(o=obs,
                            u=acts,

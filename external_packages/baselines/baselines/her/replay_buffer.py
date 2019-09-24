@@ -8,7 +8,7 @@ import time
 
 
 class ReplayBuffer:
-    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, sample_transitions=None):
+    def __init__(self, buffer_shapes, size_in_transitions, time_horizon, sample_transitions=None, n_goal_samples=1):
         """Creates a replay buffer.
 
         Args:
@@ -18,6 +18,7 @@ class ReplayBuffer:
             time_horizon (int): the time horizon for episodes
             sample_transitions (function): a function that samples from the replay buffer
         """
+        self._n_samples = n_goal_samples
         self.buffer_shapes = buffer_shapes
         self.size_in_episodes = size_in_transitions // time_horizon    # Measure in number of episodes
         self.size_in_transitions = (size_in_transitions // time_horizon)*time_horizon  # Measure in num of transitions
@@ -145,14 +146,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         #  \______50 elements_____/    \______49 elements_____/        \1 elements/
         #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
-        # self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)    #TUNG: 18/09 -> change to H=49
-        self._length_weight = int(self.time_horizon * (self.time_horizon - 1) / 2)
+        self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
         self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
         self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
         _idx = 0
-        # TUNG: 18/09 -> change to H=49
-        for i in range(self.time_horizon - 1):  # TUNG: 18/09 -> change to H=49
-            for j in range(i, self.time_horizon - 1):
+        for i in range(self.time_horizon):
+            for j in range(i, self.time_horizon):
                 self._idx_state_and_future[_idx, 0] = i
                 self._idx_state_and_future[_idx, 1] = j + 1
                 _idx += 1
@@ -230,9 +229,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         _max_weight = weights.max()
         weights = weights / _max_weight
 
-        # Loop for asserting
-        for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
-            assert key in transitions, "key %s missing from transitions" % key
+        # Loop for asserting: TUNG: For faster, can comment out it
+        # for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
+        #     assert key in transitions, "key %s missing from transitions" % key
 
         return transitions, [episode_idxs, transition_idxs, weights]
 
@@ -253,7 +252,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         weight_prob = np.divide(self.weight_of_transition[episode_idxs],
                                 self.weight_of_transition[episode_idxs].sum(axis=1)[:, None])
         for i in range(batch_size):
-            transition_idxs[i] = multinomial.rvs(n=1, p=weight_prob[i]).argmax()
+            # 12/1250 ~ 10% amount number of transition pairs
+            # Equivalent with 10% of highest probability
+            _tmp = multinomial.rvs(n=1, p=weight_prob[i], size=self._n_samples)
+            _tmp = _tmp[np.random.randint(self._n_samples)]
+            transition_idxs[i] = _tmp.argmax()
         t_states = self._idx_state_and_future[transition_idxs][:, 0]
         t_futures = self._idx_state_and_future[transition_idxs][:, 1]
         weight_of_transitions = (self.weight_of_transition[episode_idxs, transition_idxs] * self._length_weight) ** (-beta_prime)
