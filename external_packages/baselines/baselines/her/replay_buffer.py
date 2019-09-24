@@ -148,22 +148,24 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         #   \_______________________ 1275 elements ______________________________/
         # NOTE: s, ag is zero-based
         if self.replay_strategy == 'future':
-            self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
+            self._length_weight = int((self.time_horizon - 1) * self.time_horizon / 2)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
-            self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
+            self._idx_state_and_future = np.empty(self._length_weight, dtype=list)
+            # self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
             _idx = 0
-            for i in range(self.time_horizon):
-                for j in range(i, self.time_horizon):
-                    self._idx_state_and_future[_idx, 0] = i
-                    self._idx_state_and_future[_idx, 1] = j + 1
+            for i in range(self.time_horizon - 1):
+                for j in range(i, self.time_horizon - 1):
+                    self._idx_state_and_future[_idx] = [i, j + 1]
+                    # self._idx_state_and_future[_idx, 0] = i
+                    # self._idx_state_and_future[_idx, 1] = j + 1
                     _idx += 1
         elif self.replay_strategy == 'final':
-            self._length_weight = int(self.time_horizon)
+            self._length_weight = int(self.time_horizon - 1)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
             self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
-            for i in range(self.time_horizon):
+            for i in range(self.time_horizon - 1):
                 self._idx_state_and_future[i, 0] = i
-                self._idx_state_and_future[i, 1] = self.time_horizon
+                self._idx_state_and_future[i, 1] = self.time_horizon - 1
 
         self._max_episode_priority = 1.0
         self._max_transition_priority = 1.0
@@ -218,17 +220,12 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if max(episode_idxs) >= self.get_current_episode_size():
             print('Error')
             import pdb; pdb.set_trace()
-        assert max(episode_idxs) < self.get_current_episode_size(), \
-            '[AIM_ERROR]: Index is out of range: {}'.format(max(episode_idxs))
+        assert max(episode_idxs) < self.get_current_episode_size(), 'Index out of range: {}'.format(max(episode_idxs))
 
         weight_of_episodes = []
-        # p_min = self._it_min.min() / self._it_sum.sum()
-        # max_weight_of_episode = (p_min * self.get_current_episode_size()) ** (-beta)
-
         for idx in episode_idxs:
             p_sample = self._it_sum[idx] / self._it_sum.sum()
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
-            # weight_of_episodes.append(weight / max_weight_of_episode)
             weight_of_episodes.append(weight)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 

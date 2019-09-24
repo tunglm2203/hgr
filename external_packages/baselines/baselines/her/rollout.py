@@ -93,7 +93,7 @@ class RolloutWorker:
 
         # generate episodes
         obs, achieved_goals, acts, goals, successes, dones = [], [], [], [], [], []
-        info_values = [np.empty((self.time_horizon, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
+        info_values = [np.empty((self.time_horizon - 1, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
                        for key in self.info_keys]
         q_values = []
         done = None
@@ -128,12 +128,16 @@ class RolloutWorker:
                     ag_new[batch_idx] = curr_o_new['achieved_goal']
                     if 'is_success' in info:
                         success[batch_idx] = info['is_success']
-                    for idx, key in enumerate(self.info_keys):
-                        info_values[idx][step, batch_idx] = info[key]
+                    if not done:
+                        for idx, key in enumerate(self.info_keys):
+                            info_values[idx][step, batch_idx] = info[key]
                     if self.render:
                         self.envs[batch_idx].render()
                 except MujocoException:
                     return self.generate_rollouts()
+
+            if done:
+                break
 
             if np.isnan(o_new).any():
                 self.logger.warn('NaN caught during rollout generation. Trying again...')
