@@ -162,7 +162,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 self._idx_state_and_future[i, 1] = self.time_horizon - 1
 
         self._max_episode_priority = 1.0
-        self._max_transition_priority = 1.0
 
     def store_episode(self, episode_batch):
         """episode_batch: array(batch_size x (time_horizon or time_horizon+1) x dim_key)
@@ -183,8 +182,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_sum[idx] = self._max_episode_priority ** self._alpha
             self._it_min[idx] = self._max_episode_priority ** self._alpha
 
-        self.weight_of_transition[idx_ep] = \
-            (np.ones((rollout_batch_size, self._length_weight)) * self._max_transition_priority) ** self._alpha_prime
+        self.weight_of_transition[idx_ep] = np.ones((rollout_batch_size, self._length_weight)) ** self._alpha_prime
 
     def sample(self, batch_size, beta=0., beta_prime=0.):
         """
@@ -211,24 +209,25 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         # (1) Sampling in episode-level
         episode_idxs = self._sample_proportional(batch_size)
-        if max(episode_idxs) >= self.get_current_episode_size():
-            print('Error')
-            import pdb; pdb.set_trace()
         assert max(episode_idxs) < self.get_current_episode_size(), 'Index out of range: {}'.format(max(episode_idxs))
 
         weight_of_episodes = []
+        _it_sum_sum = self._it_sum.sum()
+        p_min = self._it_min.min() / _it_sum_sum
+        max_weight_eps = (p_min * self.get_current_episode_size()) ** (-beta)
         for idx in episode_idxs:
-            p_sample = self._it_sum[idx] / self._it_sum.sum()
+            p_sample = self._it_sum[idx] / _it_sum_sum
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
-            weight_of_episodes.append(weight)
+            weight_of_episodes.append(weight / max_weight_eps)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
 
         # (2) Sampling in transition-level
         transitions, extra_info = self._encode_sample(buffers, episode_idxs, beta_prime)
         weight_of_transitions, transition_idxs = extra_info[:2]
         weights = weight_of_episodes * weight_of_transitions
-        _max_weight = weights.max()
-        weights = weights / _max_weight
+        # TUNG: Local normalize
+        # _max_weight = weights.max()
+        # weights = weights / _max_weight
 
         # Loop for asserting: TUNG: For faster, can comment out it
         # for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
@@ -250,14 +249,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch_size = len(episode_idxs)
 
         transition_idxs = np.zeros(batch_size, dtype=np.int64)  # composed by `t_states` & `t_futures`
+        weight_eps_sum = self.weight_of_transition[episode_idxs].sum(axis=1)
         weight_prob = np.divide(self.weight_of_transition[episode_idxs],
-                                self.weight_of_transition[episode_idxs].sum(axis=1)[:, None])
+                                weight_eps_sum[:, None])
 
         for i in range(batch_size):
             transition_idxs[i] = multinomial.rvs(n=1, p=weight_prob[i]).argmax()
         t_states = self._idx_state_and_future[transition_idxs][:, 0]
         t_futures = self._idx_state_and_future[transition_idxs][:, 1]
-        weight_of_transitions = (self.weight_of_transition[episode_idxs, transition_idxs] * self._length_weight) ** (-beta_prime)
+        p_min = self.weight_of_transition[episode_idxs].min(axis=1) / weight_eps_sum
+        max_weight_trans = (p_min * self._length_weight) ** (-beta_prime)
+        weight_of_transitions = \
+            ((self.weight_of_transition[episode_idxs, transition_idxs] * self._length_weight) ** (-beta_prime))/max_weight_trans
 
         transitions = {key: cur_buffer[key][episode_idxs, t_states].copy()
                        for key in cur_buffer.keys()}
@@ -316,8 +319,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         """
         assert len(episode_idxs) == len(priorities) and len(episode_idxs) == len(idxes_in_ep)
         for ep_idx, _priority_of_transition, transition_idx in zip(episode_idxs, priorities, idxes_in_ep):
-            assert _priority_of_transition > 0
-            assert 0 <= ep_idx < self.get_current_episode_size()
+            assert _priority_of_transition > 0 and 0 <= ep_idx < self.get_current_episode_size(), "Error while updating priority"
             # Update weight for transitions in 1 episode
             self.weight_of_transition[ep_idx, transition_idx] = _priority_of_transition ** self._alpha_prime
 
@@ -327,7 +329,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._it_min[ep_idx] = _priority_of_episode ** self._alpha
 
             self._max_episode_priority = max(self._max_episode_priority, _priority_of_episode)
-            self._max_transition_priority = max(self._max_transition_priority, _priority_of_transition)
 
 
 def vmultinomial_sampling(counts, pvals, seed=None):
