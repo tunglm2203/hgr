@@ -119,6 +119,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
                  replay_strategy, replay_k, reward_fun):
         self.replay_strategy = replay_strategy
+        self.global_norm = True
         it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
@@ -214,23 +215,27 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             import pdb; pdb.set_trace()
         assert max(episode_idxs) < self.get_current_episode_size(), 'Index out of range: {}'.format(max(episode_idxs))
 
-        weight_of_episodes = []
+        weight_of_episodes, max_weight_eps = [], 1.0
+        _it_sum_sum = self._it_sum.sum()
+        if self.global_norm:
+            p_min = self._it_min.min() / _it_sum_sum
+            max_weight_eps = (p_min * self.get_current_episode_size()) ** (-beta)
         for idx in episode_idxs:
-            p_sample = self._it_sum[idx] / self._it_sum.sum()
+            p_sample = self._it_sum[idx] / _it_sum_sum
             weight = (p_sample * self.get_current_episode_size()) ** (-beta)
             weight_of_episodes.append(weight)
         weight_of_episodes = np.array(weight_of_episodes).squeeze()
+
+        if self.global_norm:
+            weight_of_episodes = weight_of_episodes / max_weight_eps
 
         # (2) Sampling in transition-level
         transitions, extra_info = self._encode_sample(buffers, episode_idxs, beta_prime)
         weight_of_transitions, transition_idxs = extra_info[:2]
         weights = weight_of_episodes * weight_of_transitions
-        _max_weight = weights.max()
-        weights = weights / _max_weight
-
-        # Loop for asserting
-        for key in (['r', 'o_2', 'ag_2'] + list(self.buffers.keys())):
-            assert key in transitions, "key %s missing from transitions" % key
+        if not self.global_norm:
+            _max_weight = weights.max()
+            weights = weights / _max_weight
 
         return transitions, [episode_idxs, transition_idxs, weights]
 
