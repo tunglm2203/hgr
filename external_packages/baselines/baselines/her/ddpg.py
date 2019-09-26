@@ -98,7 +98,6 @@ class DDPG(object):
         self.subtract_goals = subtract_goals
         self.clip_pos_returns = clip_pos_returns
         self.clip_return = clip_return
-        self.bc_loss = bc_loss
         self.q_filter = q_filter
         self.num_demo = num_demo
         self.demo_batch_size = demo_batch_size
@@ -155,7 +154,7 @@ class DDPG(object):
             self._create_network(reuse=reuse)
 
         # Configure the replay buffer.
-        buffer_shapes = {key: (self.time_horizon-1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        buffer_shapes = {key: (self.time_horizon - 1 if key != 'o' else self.time_horizon, *input_shapes[key])
                          for key, val in input_shapes.items()}
         buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
         buffer_shapes['ag'] = (self.time_horizon, self.dimg)
@@ -178,9 +177,7 @@ class DDPG(object):
             self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
 
         self.episode_idxs = np.zeros(self.batch_size, dtype=np.int64)
-        self.episode_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
         self.transition_idxs = np.zeros(self.batch_size, dtype=np.int64)
-        self.transition_idxs_for_bc = np.zeros(self.batch_size, dtype=np.int64)
 
     def _random_action(self, n):
         return np.random.uniform(low=-self.max_u, high=self.max_u, size=(n, self.dimu))
@@ -380,9 +377,6 @@ class DDPG(object):
         batch = self.staging_tf.get()
         batch_tf = OrderedDict([(key, batch[i]) for i, key in enumerate(self.stage_shapes.keys())])
         batch_tf['r'] = tf.reshape(batch_tf['r'], [-1, 1])
-
-        # Mask used to choose the demo buffer samples
-        mask = np.concatenate((np.zeros(self.batch_size - self.demo_batch_size), np.ones(self.demo_batch_size)), axis=0)
 
         # networks
         with tf.variable_scope('main') as scope:
