@@ -103,12 +103,12 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
                     best_success_rate = success_rate
                     logger.info('New best success rate: {}. Saving to {} ...'.format(best_success_rate,
                                                                                      best_policy_path))
-                    evaluator.save_policy(best_policy_path)
+                    # evaluator.save_policy(best_policy_path)
 
                 if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and logdir:
                     logger.info('Saving periodic policy to {}...'.format(periodic_policy_path.format(epoch, cycle_idx)))
-                    evaluator.save_policy(latest_policy_path)
-                    evaluator.save_policy(periodic_policy_path.format(epoch, cycle_idx))
+                    # evaluator.save_policy(latest_policy_path)
+                    # evaluator.save_policy(periodic_policy_path.format(epoch, cycle_idx))
 
                 # make sure that different threads have different seeds
                 local_uniform = np.random.uniform(size=(1,))
@@ -242,7 +242,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
           n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'], n_cycles=params['n_cycles'],
           n_batches=params['n_batches'], policy_save_interval=policy_save_interval,
-          demo_file=demo_file, logdir=logdir, use_per=params['_use_per'],
+          logdir=logdir, use_per=params['_use_per'],
           log_interval=log_interval)
 
 
@@ -257,8 +257,7 @@ parser.add_argument('--policy_save_interval', type=int, default=1, help='If 0 on
 parser.add_argument('--log_interval', type=int, default=-1, help='-1 is printing at end of epoch')
 parser.add_argument('--replay_strategy', type=str, default='future', help='"future" uses HER, "none" disables HER')
 parser.add_argument('--clip_return', action='store_false', help='Whether or not returns should be clipped')
-parser.add_argument('--demo_file', type=str, default='experiment/data_generation/demonstration_FetchPickAndPlace.npz',
-                    help='Demo data file path')
+parser.add_argument('--demo_file', type=str, default='', help='Demo data file path')
 parser.add_argument('--load_path', type=str, default='', help='Pretrained model path')
 # Get argument from command line
 args = parser.parse_args()

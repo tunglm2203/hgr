@@ -6,7 +6,7 @@ from tensorflow.contrib.staging import StagingArea
 
 from baselines import logger
 from baselines.her.util import (
-    import_function, flatten_grads, transitions_in_episode_batch, convert_episode_to_batch_major)
+    import_function, flatten_grads, transitions_in_episode_batch)
 from baselines.her.normalizer import Normalizer
 from baselines.her.replay_buffer import PrioritizedReplayBuffer, ReplayBuffer
 from baselines.common.mpi_adam import MpiAdam
@@ -23,7 +23,7 @@ class DDPG(object):
                  polyak, batch_size, q_lr, pi_lr, norm_eps, norm_clip, max_u,
                  action_l2, clip_obs, scope, time_horizon, rollout_batch_size,
                  subtract_goals, relative_goals, clip_pos_returns, clip_return,
-                 bc_loss, q_filter, num_demo, demo_batch_size, prm_loss_weight,
+                 q_filter, num_demo, demo_batch_size, prm_loss_weight,
                  aux_loss_weight, sample_transitions, gamma, use_per, total_timesteps,
                  prioritized_replay_alpha, prioritized_replay_beta0,
                  prioritized_replay_beta_iters, prioritized_replay_alpha_prime,
@@ -57,7 +57,6 @@ class DDPG(object):
         :param relative_goals: (boolean) whether or not relative goals should be fed into the network
         :param clip_pos_returns: (boolean) whether or not positive returns should be clipped
         :param clip_return: (float) clip returns to be in [-clip_return, clip_return]
-        :param bc_loss: whether or not the behavior cloning loss should be used as an auxilliary loss
         :param q_filter: whether or not a filter on the q value update should be used when training with demonstartions
         :param num_demo: number of episodes in to be used in the demonstration buffer
         :param demo_batch_size: number of samples to be used from the demonstrations buffer, per mpi thread

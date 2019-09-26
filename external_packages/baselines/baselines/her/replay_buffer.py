@@ -118,6 +118,7 @@ class ReplayBuffer:
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
                  replay_strategy, replay_k, reward_fun):
+        self.replay_strategy = replay_strategy
         it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
@@ -138,12 +139,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._it_sum = SumSegmentTree(it_capacity)
         self._it_min = MinSegmentTree(it_capacity)
 
-        # size of weight_of_episode is size_in_episodes x time_horizon^2 (size_in_episodes x 2500)
-        # i-th 50 elements are i-th state combined with 50 goals from ag_1, ..., ag_49
-        # [s0||ag_1, ..., s0||ag_50], [s1||ag_2, ..., s1||ag_50], ..., [s49||ag_50]
-        #  \______50 elements_____/    \______49 elements_____/        \1 elements/
-        #   \_______________________ 1275 elements ______________________________/
-        # NOTE: s, ag is zero-based
         if self.replay_strategy == 'future':
             self._length_weight = int((self.time_horizon - 1) * self.time_horizon / 2)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
