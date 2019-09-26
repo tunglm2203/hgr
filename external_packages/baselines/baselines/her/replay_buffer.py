@@ -140,13 +140,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._it_min = MinSegmentTree(it_capacity)
 
         if self.replay_strategy == 'future':
-            self._length_weight = int((self.time_horizon - 1) * self.time_horizon / 2)
+            self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
             self._idx_state_and_future = np.empty(self._length_weight, dtype=list)
             # self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
             _idx = 0
-            for i in range(self.time_horizon - 1):
-                for j in range(i, self.time_horizon - 1):
+            for i in range(self.time_horizon):
+                for j in range(i, self.time_horizon):
                     self._idx_state_and_future[_idx] = [i, j + 1]
                     # self._idx_state_and_future[_idx, 0] = i
                     # self._idx_state_and_future[_idx, 1] = j + 1

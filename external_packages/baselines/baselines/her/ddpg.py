@@ -153,10 +153,10 @@ class DDPG(object):
             self._create_network(reuse=reuse)
 
         # Configure the replay buffer.
-        buffer_shapes = {key: (self.time_horizon - 1 if key != 'o' else self.time_horizon, *input_shapes[key])
+        buffer_shapes = {key: (self.time_horizon if key != 'o' else self.time_horizon + 1, *input_shapes[key])
                          for key, val in input_shapes.items()}
         buffer_shapes['g'] = (buffer_shapes['g'][0], self.dimg)
-        buffer_shapes['ag'] = (self.time_horizon, self.dimg)
+        buffer_shapes['ag'] = (self.time_horizon + 1, self.dimg)
 
         if self.prioritized_replay_beta_iters is None:
             self.prioritized_replay_beta_iters = self.total_timesteps
