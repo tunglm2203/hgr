@@ -29,7 +29,7 @@ def mpi_average(value):
 
 
 def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles, n_batches,
-          policy_save_interval, demo_file, logdir, use_per, log_interval=-1):
+          policy_save_interval, logdir, use_per, log_interval=-1):
     if log_interval == -1:
         log_interval = n_cycles - 1
 
@@ -41,19 +41,14 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
     periodic_policy_path = os.path.join(logdir, 'policy_epoch_{}_cycle_{}.pkl')
 
     best_success_rate = -1
-    cloning_loss = 0.
     time_step = 0
-
-    if policy.bc_loss == 1:
-        logger.info("\n[INFO] Initializing demonstration buffer...")
-        policy.init_demo_buffer(demo_file)  # initialize demo buffer if training with demonstrations
 
     # num_timesteps = n_epochs * n_cycles * rollout_length * number of rollout workers
     logger.info("\n[INFO] Start training...")
     for epoch in tqdm(range(n_epochs)):
         logger.info("\n[INFO] %s" % logdir)
         rollout_worker.clear_history()
-        total_q1_loss, total_pi_loss, total_cloning_loss = 0.0, 0.0, 0.0
+        total_q1_loss, total_pi_loss = 0.0, 0.0
         for cycle_idx in tqdm(range(n_cycles)):
             episode = rollout_worker.generate_rollouts()
             time_step += rollout_worker.time_horizon * rollout_worker.rollout_batch_size
@@ -61,39 +56,21 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
             for idx in range(n_batches):
                 train_q, train_pi = False, False
-                if policy.bc_loss:
-                    if idx % policy.train_q_interval == 0:
-                        train_q = True
-                    if idx % policy.train_pi_interval == 0:
-                        train_pi = True
-                    td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=time_step,
-                                                                                    train_q=train_q, train_pi=train_pi)
-                else:
-                    if idx % policy.train_q_interval == 0:
-                        train_q = True
-                    if idx % policy.train_pi_interval == 0:
-                        train_pi = True
-                    td_errors, critic_loss, actor_loss = policy.train(time_step=time_step,
-                                                                      train_q=train_q, train_pi=train_pi)
+                if idx % policy.train_q_interval == 0:
+                    train_q = True
+                if idx % policy.train_pi_interval == 0:
+                    train_pi = True
+                td_errors, critic_loss, actor_loss, cloning_loss = policy.train(time_step=time_step,
+                                                                                train_q=train_q, train_pi=train_pi)
 
                 if use_per and train_q:
-                    if policy.bc_loss:
-                        new_priorities = np.abs(td_errors[:policy.batch_size - policy.demo_batch_size]) + \
-                                         policy.prioritized_replay_eps
-                        new_priorities_for_bc = \
-                            np.abs(td_errors[policy.demo_batch_size:]) + policy.prioritized_replay_eps
-                        policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
-                        policy.demo_buffer.update_priorities(policy.episode_idxs_for_bc, new_priorities_for_bc,
-                                                             policy.transition_idxs_for_bc)
-                    else:
-                        new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
-                        policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
+                    new_priorities = np.abs(td_errors) + policy.prioritized_replay_eps
+                    policy.buffer.update_priorities(policy.episode_idxs, new_priorities, policy.transition_idxs)
 
                 if train_q:
                     total_q1_loss += critic_loss
                 if train_pi:
                     total_pi_loss += actor_loss
-                    total_cloning_loss += cloning_loss if policy.bc_loss else 0.
 
             policy.update_target_net()
 
@@ -116,8 +93,7 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
 
                 log_dict['q1_loss'] = total_q1_loss * policy.train_q_interval / n_batches
                 log_dict['pi_loss'] = total_pi_loss * policy.train_pi_interval / n_batches
-                if policy.bc_loss:
-                    log_dict['cloning_loss'] = total_cloning_loss / n_batches
+
                 if rank == 0:
                     logger.dump_tabular()
 
@@ -127,12 +103,12 @@ def train(policy, rollout_worker, evaluator, n_epochs, n_test_rollouts, n_cycles
                     best_success_rate = success_rate
                     logger.info('New best success rate: {}. Saving to {} ...'.format(best_success_rate,
                                                                                      best_policy_path))
-                    evaluator.save_policy(best_policy_path)
+                    # evaluator.save_policy(best_policy_path)
 
                 if rank == 0 and policy_save_interval > 0 and epoch % policy_save_interval == 0 and logdir:
                     logger.info('Saving periodic policy to {}...'.format(periodic_policy_path.format(epoch, cycle_idx)))
-                    evaluator.save_policy(latest_policy_path)
-                    evaluator.save_policy(periodic_policy_path.format(epoch, cycle_idx))
+                    # evaluator.save_policy(latest_policy_path)
+                    # evaluator.save_policy(periodic_policy_path.format(epoch, cycle_idx))
 
                 # make sure that different threads have different seeds
                 local_uniform = np.random.uniform(size=(1,))
@@ -266,7 +242,7 @@ def launch(env, logdir, n_epochs, num_cpu, seed=None,
     train(policy=policy, rollout_worker=rollout_worker, evaluator=evaluator,
           n_epochs=n_epochs, n_test_rollouts=params['n_test_rollouts'], n_cycles=params['n_cycles'],
           n_batches=params['n_batches'], policy_save_interval=policy_save_interval,
-          demo_file=demo_file, logdir=logdir, use_per=params['_use_per'],
+          logdir=logdir, use_per=params['_use_per'],
           log_interval=log_interval)
 
 
@@ -281,8 +257,7 @@ parser.add_argument('--policy_save_interval', type=int, default=1, help='If 0 on
 parser.add_argument('--log_interval', type=int, default=-1, help='-1 is printing at end of epoch')
 parser.add_argument('--replay_strategy', type=str, default='future', help='"future" uses HER, "none" disables HER')
 parser.add_argument('--clip_return', action='store_false', help='Whether or not returns should be clipped')
-parser.add_argument('--demo_file', type=str, default='experiment/data_generation/demonstration_FetchPickAndPlace.npz',
-                    help='Demo data file path')
+parser.add_argument('--demo_file', type=str, default='', help='Demo data file path')
 parser.add_argument('--load_path', type=str, default='', help='Pretrained model path')
 # Get argument from command line
 args = parser.parse_args()

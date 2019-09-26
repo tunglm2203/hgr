@@ -125,9 +125,13 @@ for i in range(len(collect_data)):
 
         for config in sorted(data[env_id].keys()):
             xs, ys = zip(*data[env_id][config])
+            n_experiments = len(xs)
             if args.range != -1:
-                _xs = (xs[0][:args.range], xs[1][:args.range])
-                _ys = (ys[0][:args.range], ys[1][:args.range])
+                _xs = []
+                _ys = []
+                for k in range(n_experiments):
+                    _xs.append(xs[k][:args.range])
+                    _ys.append(ys[k][:args.range])
                 xs = _xs
                 ys = _ys
             xs, ys = pad(xs), pad(ys)

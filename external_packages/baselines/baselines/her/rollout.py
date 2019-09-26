@@ -95,8 +95,7 @@ class RolloutWorker:
         obs, achieved_goals, acts, goals, successes, dones = [], [], [], [], [], []
         info_values = [np.empty((self.time_horizon, self.rollout_batch_size, self.dims['info_' + key]), np.float32)
                        for key in self.info_keys]
-        q_values = []
-        done = None
+        q_values, done = [], None
         for step in range(self.time_horizon):
             policy_output = self.policy.get_actions(
                 o, ag, self.g,
@@ -120,7 +119,7 @@ class RolloutWorker:
             success = np.zeros(self.rollout_batch_size)
             # compute new states and observations
             for batch_idx in range(self.rollout_batch_size):
-                try:
+                try:    # try for render
                     # We fully ignore the reward here because it will have to be re-computed
                     # for HER.
                     curr_o_new, _, done, info = self.envs[batch_idx].step(u[batch_idx])

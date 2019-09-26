@@ -38,18 +38,18 @@ DEFAULT_ENV_PARAMS = {
         'buffer_size': int(8E5),
     },
     'FetchPickAndPlace-v1': {
-        'n_cycles': 20,
-        'n_batches': 40,    # 80
+        'n_cycles': 50,  # 20
+        'n_batches': 40,    # 40, 80
         'rollout_batch_size': 2,
         'batch_size': 256,
         'n_test_rollouts': 10,
-        'random_eps': 0.1,
-        'noise_eps': 0.1,
+        'random_eps': 0.3,  # 0.1
+        'noise_eps': 0.2,   # 0.1
 
         'replay_k': 4,
 
-        'bc_loss': True,
-        'q_filter': True,
+        'bc_loss': False,
+        'q_filter': False,
         'demo_batch_size': 128,
         'num_demo': 100,
         'prm_loss_weight': 0.001,
@@ -110,7 +110,7 @@ DEFAULT_ENV_PARAMS = {
         'n_batches': 40,
         'rollout_batch_size': 2,
         'batch_size': 256,
-        'n_test_rollouts': 5,
+        'n_test_rollouts': 10,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
@@ -138,6 +138,38 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
         'buffer_size': int(1E6),
+    },
+    # Gym-dobot
+    'DobotReach-v1': {
+        'n_cycles': 10,
+        'n_batches': 20,
+        'rollout_batch_size': 2,
+        'batch_size': 256,
+        'n_test_rollouts': 5,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'replay_k': 4,
+
+        'bc_loss': False,
+        'q_filter': False,
+
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.9,
+
+        'use_per': False,
+        'prioritized_replay_alpha': 0.7,
+        'prioritized_replay_beta0': 0.5,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.7,
+        'prioritized_replay_beta0_prime': 0.5,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+
+        'buffer_size': int(8E5),
     },
 }
 
