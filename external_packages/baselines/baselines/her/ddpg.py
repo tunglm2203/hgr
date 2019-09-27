@@ -29,7 +29,7 @@ class DDPG(object):
                  prioritized_replay_beta_iters, prioritized_replay_alpha_prime,
                  prioritized_replay_beta0_prime, prioritized_replay_beta_iters_prime,
                  prioritized_replay_eps, use_huber_loss,
-                 train_pi_interval, train_q_interval, info,
+                 train_pi_interval, train_q_interval, info, global_norm=False,
                  reuse=False):
         """
         Implementation of DDPG that is used in combination with Hindsight Experience Replay (HER).
@@ -105,6 +105,7 @@ class DDPG(object):
         self.sample_transitions = sample_transitions
         self.gamma = gamma
         self.use_per = use_per
+        self.global_norm = global_norm
         self.total_timesteps = total_timesteps
         self.prioritized_replay_alpha = prioritized_replay_alpha
         self.prioritized_replay_beta0 = prioritized_replay_beta0
@@ -171,7 +172,8 @@ class DDPG(object):
                                                   alpha_prime=self.prioritized_replay_alpha_prime,
                                                   replay_strategy=self.sample_transitions['replay_strategy'],
                                                   replay_k=self.sample_transitions['replay_k'],
-                                                  reward_fun=self.sample_transitions['reward_fun'])
+                                                  reward_fun=self.sample_transitions['reward_fun'],
+                                                  global_norm=self.global_norm)
         else:
             self.buffer = ReplayBuffer(buffer_shapes, self.buffer_size, self.time_horizon, self.sample_transitions)
 

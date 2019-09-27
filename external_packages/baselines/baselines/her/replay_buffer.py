@@ -117,9 +117,9 @@ class ReplayBuffer:
 
 class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(self, buffer_shapes, size_in_transitions, time_horizon, alpha, alpha_prime,
-                 replay_strategy, replay_k, reward_fun):
+                 replay_strategy, replay_k, reward_fun, global_norm=False):
         self.replay_strategy = replay_strategy
-        self.global_norm = True
+        self.global_norm = global_norm
         it_capacity = 1     # Iterator for computing capacity of buffer
         size_in_episodes = size_in_transitions // time_horizon
         while it_capacity < size_in_episodes:
@@ -258,8 +258,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
         weight_of_transitions = np.zeros(batch_size, dtype=np.float)
         for i in range(batch_size):
-            # _max_weight_transition = \
-            #     (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
+            if self.global_norm:
+                _max_weight_transition = \
+                    (self.weight_of_transition[episode_idxs[i]].min() * self._length_weight) ** (-beta_prime)
             weight_prob = \
                 self.weight_of_transition[episode_idxs[i]] / self.weight_of_transition[episode_idxs[i]].sum()
 
@@ -268,9 +269,10 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             transition_idxs[i] = _idx
             t_states[i] = self._idx_state_and_future[_idx][0]   # Get index from lookup table
             t_futures[i] = self._idx_state_and_future[_idx][1]  # Get index from lookup table
-            # weight_of_transitions[i] = \
-            #     (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
-            #     / _max_weight_transition
+            if self.global_norm:
+                weight_of_transitions[i] = \
+                    (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
+                    / _max_weight_transition
             weight_of_transitions[i] = \
                 (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
 

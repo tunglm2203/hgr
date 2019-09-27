@@ -17,9 +17,6 @@ DEFAULT_ENV_PARAMS = {
 
         'replay_k': 4,
 
-        'bc_loss': False,
-        'q_filter': False,
-
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
@@ -40,20 +37,10 @@ DEFAULT_ENV_PARAMS = {
     'FetchPickAndPlace-v1': {
         'n_cycles': 50,  # 20
         'n_batches': 40,    # 40, 80
-        'rollout_batch_size': 2,
-        'batch_size': 256,
-        'n_test_rollouts': 10,
         'random_eps': 0.3,  # 0.1
         'noise_eps': 0.2,   # 0.1
 
         'replay_k': 4,
-
-        'bc_loss': False,
-        'q_filter': False,
-        'demo_batch_size': 128,
-        'num_demo': 100,
-        'prm_loss_weight': 0.001,
-        'aux_loss_weight': 0.0078,
 
         'train_q_interval': 1,  # 2
         'train_pi_interval': 1,
@@ -70,58 +57,40 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
         'buffer_size': int(8E5),
+        'global_norm': False,
     },
     'FetchPush-v1': {
         'n_cycles': 50,
         'n_batches': 40,   # 80,
-        'rollout_batch_size': 2,
-        'batch_size': 256,
-        'n_test_rollouts': 10,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
         'replay_k': 4,
-
-        'bc_loss': False,
-        'q_filter': False,
-        'demo_batch_size': 128,
-        'num_demo': 100,
-        'prm_loss_weight': 0.001,
-        'aux_loss_weight': 0.0078,
 
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
         'polyak': 0.95,
 
-        'use_per': False,
-        'prioritized_replay_alpha': 0.6,
+        'use_per': True,
+        'prioritized_replay_alpha': 1.0,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_alpha_prime': 1.0,
         'prioritized_replay_beta0_prime': 0.4,
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
         'buffer_size': int(1E6),
+        'global_norm': True,
     },
     'FetchSlide-v1': {
         'n_cycles': 50,
         'n_batches': 40,
-        'rollout_batch_size': 2,
-        'batch_size': 256,
-        'n_test_rollouts': 10,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
         'replay_k': 4,
-
-        'bc_loss': False,
-        'q_filter': False,
-        'demo_batch_size': 128,
-        'num_demo': 100,
-        'prm_loss_weight': 0.001,
-        'aux_loss_weight': 0.0078,
 
         'train_q_interval': 1,
         'train_pi_interval': 1,
@@ -138,28 +107,76 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
         'buffer_size': int(1E6),
+        'global_norm': False,
     },
-    # Gym-dobot
-    'DobotReach-v1': {
-        'n_cycles': 10,
-        'n_batches': 20,
-        'rollout_batch_size': 2,
-        'batch_size': 256,
-        'n_test_rollouts': 5,
+    'HandManipulateBlockFull-v0': {
+        'n_cycles': 50,
+        'n_batches': 40,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
         'replay_k': 4,
 
-        'bc_loss': False,
-        'q_filter': False,
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.95,
+
+        'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+        'replay_strategy': 'future',  # final
+
+        'buffer_size': int(1E6),
+    },
+
+    'HandManipulateEggFull-v0': {
+        'n_cycles': 50,
+        'n_batches': 40,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'replay_k': 4,
 
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
-        'polyak': 0.9,
+        'polyak': 0.95,
 
-        'use_per': False,
+        'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+        'replay_strategy': 'final',  # final
+
+        'buffer_size': int(1E6),
+    },
+
+    'HandManipulatePenRotate-v0': {
+        'n_cycles': 50,
+        'n_batches': 40,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'replay_k': 4,
+
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.95,
+
+        'use_per': True,
         'prioritized_replay_alpha': 0.7,
         'prioritized_replay_beta0': 0.5,
         'prioritized_replay_beta_iters': None,
@@ -168,8 +185,9 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+        'replay_strategy': 'future',  # final
 
-        'buffer_size': int(8E5),
+        'buffer_size': int(1E6),
     },
 }
 
@@ -366,6 +384,7 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, clip_return=True)
 
                         'total_timesteps': total_timesteps,
                         'rollout_batch_size': params['rollout_batch_size'],
+                        'global_norm': params['global_norm']
                         })
     ddpg_params['info'] = {
         'env_name': params['env_name'],
@@ -380,7 +399,7 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, clip_return=True)
                   time_horizon=ddpg_params['time_horizon'], rollout_batch_size=ddpg_params['rollout_batch_size'],
                   subtract_goals=ddpg_params['subtract_goals'], relative_goals=ddpg_params['relative_goals'],
                   clip_pos_returns=ddpg_params['clip_pos_returns'], clip_return=ddpg_params['clip_return'],
-                  bc_loss=ddpg_params['bc_loss'], q_filter=ddpg_params['q_filter'], num_demo=ddpg_params['num_demo'],
+                  q_filter=ddpg_params['q_filter'], num_demo=ddpg_params['num_demo'],
                   demo_batch_size=ddpg_params['demo_batch_size'], prm_loss_weight=ddpg_params['prm_loss_weight'],
                   aux_loss_weight=ddpg_params['aux_loss_weight'], sample_transitions=ddpg_params['sample_transitions'],
                   gamma=ddpg_params['gamma'], use_per=ddpg_params['use_per'],
@@ -396,6 +415,7 @@ def configure_ddpg(dims, params, total_timesteps, reuse=False, clip_return=True)
                   train_pi_interval=ddpg_params['train_pi_interval'],
                   train_q_interval=ddpg_params['train_q_interval'],
                   info=ddpg_params['info'],
+                  global_norm=ddpg_params['global_norm'],
                   reuse=reuse)
     return policy
 
