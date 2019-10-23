@@ -273,8 +273,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 weight_of_transitions[i] = \
                     (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime) \
                     / _max_weight_transition
-            weight_of_transitions[i] = \
-                (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
+            else:
+                weight_of_transitions[i] = \
+                    (self.weight_of_transition[episode_idxs[i], _idx] * self._length_weight) ** (-beta_prime)
 
         transitions = {key: episode_batch[key][episode_idxs, t_states].copy()
                        for key in episode_batch.keys()}
