@@ -143,6 +143,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         if self.replay_strategy == 'future':
             self._length_weight = int((self.time_horizon + 1) * self.time_horizon / 2)
             self.weight_of_transition = np.empty([self.size_in_episodes, self._length_weight])
+            self.td_of_transition = np.empty([self.size_in_episodes, self._length_weight])
             self._idx_state_and_future = np.empty(self._length_weight, dtype=list)
             # self._idx_state_and_future = np.empty([self._length_weight, 2], dtype=np.int32)  # Lookup table
             _idx = 0
@@ -160,7 +161,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
                 self._idx_state_and_future[i, 0] = i
                 self._idx_state_and_future[i, 1] = self.time_horizon - 1
 
-        self._max_episode_priority = 1.0
+        # self._max_episode_priority = 1.0
         self._max_transition_priority = 1.0
 
     def store_episode(self, episode_batch):
@@ -177,13 +178,15 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         else:
             rollout_batch_size = None
 
+        _default_priority_ep = self._max_transition_priority ** self._alpha
         for k in range(rollout_batch_size):
             idx = idx_ep[k]
-            self._it_sum[idx] = self._max_episode_priority ** self._alpha
-            self._it_min[idx] = self._max_episode_priority ** self._alpha
+            self._it_sum[idx] = _default_priority_ep
+            self._it_min[idx] = _default_priority_ep
 
         self.weight_of_transition[idx_ep] = \
             (np.ones((rollout_batch_size, self._length_weight)) * self._max_transition_priority) ** self._alpha_prime
+        self.td_of_transition[idx_ep] = (np.ones((rollout_batch_size, self._length_weight)) * self._max_transition_priority)
 
     def sample(self, batch_size, beta=0., beta_prime=0.):
         """
@@ -209,9 +212,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         assert beta_prime > 0
 
         # (1) Sampling in episode-level
-        episode_idxs = self._sample_proportional(batch_size)
+        episode_idxs, dbg = self._sample_proportional(batch_size)
         if max(episode_idxs) >= self.get_current_episode_size():
-            print('Error')
+            print('Error: ', dbg)
             import pdb; pdb.set_trace()
         assert max(episode_idxs) < self.get_current_episode_size(), 'Index out of range: {}'.format(max(episode_idxs))
 
@@ -243,11 +246,15 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         res = []
         p_total = self._it_sum.sum(0, self.get_current_episode_size())
         every_range_len = p_total / batch_size
+        dbg = []
         for i in range(batch_size):
-            mass = np.random.uniform() * every_range_len + i * every_range_len
+            _tmp = np.random.uniform()
+            _tmp = np.clip(_tmp, 0, 0.9999)
+            dbg.append(_tmp)
+            mass = _tmp * every_range_len + i * every_range_len
             idx = self._it_sum.find_prefixsum_idx(mass)
             res.append(idx)
-        return np.array(res)
+        return np.array(res), dbg
 
     def _encode_sample(self, episode_batch, episode_idxs, beta_prime):
         batch_size = len(episode_idxs)
@@ -339,13 +346,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             assert 0 <= ep_idx < self.get_current_episode_size()
             # Update weight for transitions in 1 episode
             self.weight_of_transition[ep_idx, transition_idx] = _priority_of_transition ** self._alpha_prime
+            self.td_of_transition[ep_idx, transition_idx] = _priority_of_transition
 
             # Update weight for all episodes
-            _priority_of_episode = self.weight_of_transition[ep_idx].mean()
+            _priority_of_episode = self.td_of_transition[ep_idx].mean()
             self._it_sum[ep_idx] = _priority_of_episode ** self._alpha
             self._it_min[ep_idx] = _priority_of_episode ** self._alpha
 
-            self._max_episode_priority = max(self._max_episode_priority, _priority_of_episode)
+            # self._max_episode_priority = max(self._max_episode_priority, _priority_of_episode)
             self._max_transition_priority = max(self._max_transition_priority, _priority_of_transition)
 
 
