@@ -20,32 +20,7 @@ DEFAULT_ENV_PARAMS = {
         'train_q_interval': 1,
         'train_pi_interval': 1,
 
-        'polyak': 0.9,
-
-        'use_per': True,
-        'prioritized_replay_alpha': 0.7,
-        'prioritized_replay_beta0': 0.5,
-        'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 0.7,
-        'prioritized_replay_beta0_prime': 0.5,
-        'prioritized_replay_beta_iters_prime': None,
-        'prioritized_replay_eps': 1e-6,
-        'use_huber_loss': False,
-
-        'buffer_size': int(8E5),
-    },
-    'FetchPickAndPlace-v1': {
-        'n_cycles': 50,  # 20
-        'n_batches': 40,    # 40, 80
-        'random_eps': 0.3,  # 0.1
-        'noise_eps': 0.2,   # 0.1
-
-        'replay_k': 4,
-
-        'train_q_interval': 1,  # 2
-        'train_pi_interval': 1,
-
-        'polyak': 0.95,     # 0.9
+        'polyak': 0.95,
 
         'use_per': True,
         'prioritized_replay_alpha': 0.6,
@@ -56,12 +31,13 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
-        'buffer_size': int(8E5),
+
+        'buffer_size': int(1E6),
         'global_norm': False,
     },
-    'FetchPush-v1': {
+    'FetchPickAndPlace-v1': {
         'n_cycles': 50,
-        'n_batches': 40,   # 80,
+        'n_batches': 40,
         'random_eps': 0.3,
         'noise_eps': 0.2,
 
@@ -71,13 +47,40 @@ DEFAULT_ENV_PARAMS = {
         'train_pi_interval': 1,
 
         'polyak': 0.95,
+        'batch_size': 256,
 
         'use_per': True,
-        'prioritized_replay_alpha': 1.0,
+        'prioritized_replay_alpha': 0.6,
         'prioritized_replay_beta0': 0.4,
         'prioritized_replay_beta_iters': None,
-        'prioritized_replay_alpha_prime': 1.0,
+        'prioritized_replay_alpha_prime': 0.6,
         'prioritized_replay_beta0_prime': 0.4,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+        'buffer_size': int(1e6),
+        'global_norm': False,
+    },
+    'FetchPush-v1': {
+        'n_cycles': 50,
+        'n_batches': 40,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'replay_k': 4,
+
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.95,
+        'batch_size': 256,
+
+        'use_per': True,
+        'prioritized_replay_alpha': 0.8,
+        'prioritized_replay_beta0': 0.5,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.0,
+        'prioritized_replay_beta0_prime': 0.0,
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
@@ -85,6 +88,32 @@ DEFAULT_ENV_PARAMS = {
         'global_norm': True,
     },
     'FetchSlide-v1': {
+        'n_cycles': 50,
+        'n_batches': 40,
+        'random_eps': 0.3,
+        'noise_eps': 0.2,
+
+        'replay_k': 4,
+
+        'train_q_interval': 1,
+        'train_pi_interval': 1,
+
+        'polyak': 0.95,
+        'batch_size': 256,
+
+        'use_per': True,
+        'prioritized_replay_alpha': 0.6,
+        'prioritized_replay_beta0': 0.4,
+        'prioritized_replay_beta_iters': None,
+        'prioritized_replay_alpha_prime': 0.6,
+        'prioritized_replay_beta0_prime': 0.4,
+        'prioritized_replay_beta_iters_prime': None,
+        'prioritized_replay_eps': 1e-6,
+        'use_huber_loss': False,
+        'buffer_size': int(1E6),
+        'global_norm': True,
+    },
+    'HandReach-v0': {
         'n_cycles': 50,
         'n_batches': 40,
         'random_eps': 0.3,
@@ -106,8 +135,11 @@ DEFAULT_ENV_PARAMS = {
         'prioritized_replay_beta_iters_prime': None,
         'prioritized_replay_eps': 1e-6,
         'use_huber_loss': False,
+        'replay_strategy': 'future',  # final
+
         'buffer_size': int(1E6),
-        'global_norm': False,
+        'global_norm': True,
+        'rollout_batch_size': 10,
     },
     'HandManipulateBlockFull-v0': {
         'n_cycles': 50,
@@ -134,6 +166,7 @@ DEFAULT_ENV_PARAMS = {
         'replay_strategy': 'future',  # final
 
         'buffer_size': int(1E6),
+        'global_norm': False,
     },
 
     'HandManipulateEggFull-v0': {
@@ -161,6 +194,7 @@ DEFAULT_ENV_PARAMS = {
         'replay_strategy': 'final',  # final
 
         'buffer_size': int(1E6),
+        'global_norm': False,
     },
 
     'HandManipulatePenRotate-v0': {
@@ -188,6 +222,7 @@ DEFAULT_ENV_PARAMS = {
         'replay_strategy': 'future',  # final
 
         'buffer_size': int(1E6),
+        'global_norm': False,
     },
 }
 
