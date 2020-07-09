@@ -491,8 +491,10 @@ class DDPG(object):
                 'reward_fun': None
             }
 
-        excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
-                             'transition_idxs', 'transition_idxs_for_bc', 'tf', 'beta_schedule']
+        # excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs', 'episode_idxs_for_bc',
+        #                      'transition_idxs', 'transition_idxs_for_bc', 'tf', 'beta_schedule']
+        excluded_subnames = ['dimo', 'dimg', 'dimu', 'episode_idxs',
+                             'transition_idxs', 'tf', 'beta_schedule']
         for key in excluded_subnames:
             del _state[key]
 
