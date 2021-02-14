@@ -151,5 +151,5 @@ else:
     legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
 plt.legend(legend_name)
 
-plt.savefig(os.path.join(args.dir, 'fig_{}.png'.format(env_id)))
+plt.savefig(os.path.join('./fig_{}.png'.format(env_id)))
 plt.show()
