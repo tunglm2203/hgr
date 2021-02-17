@@ -65,10 +65,8 @@ parser.add_argument('--emphases', type=int, default=[-1], nargs='+')
 parser.add_argument('--ylim', type=float, default=None)
 args = parser.parse_args()
 
-# For 5 curves: Vanilla, TD-error, EBP, MEP, Ours
-color_table_1 = ['#1ac938', '#ff7c00', '#8b2be2', '#e8000b', '#023eff']
-# For 3 curves: Vanilla, TD-error, Ours
-color_table_2 = ['#1ac938', '#ff7c00', '#023eff']
+# For 5 curves: Vanilla, w/ prioritized goal, w/ prioritized episode, Ours
+color_table = ['#1ac938', '#ff7c00', '#8b2be2', '#023eff']
 
 directory = []
 for i in range(len(args.dir)):
@@ -140,11 +138,6 @@ for i in range(len(collect_data)):
     for env_id in sorted(data.keys()):
         print('exporting {}'.format(env_id))
 
-        if env_id == 'FetchReach-v1':
-            color_table = color_table_2
-        else:
-            color_table = color_table_1
-
         for config in sorted(data[env_id].keys()):
             xs, ys = zip(*data[env_id][config])
             n_experiments = len(xs)
@@ -180,7 +173,7 @@ for i in range(len(collect_data)):
                     _ids = _ids[0][0] if _ids[0].size > 0 else None
                     idx_75 = xs[0][_ids] if _ids is not None else np.inf
 
-                    _ids = np.where(per >= 0.95)  # 95% (pickplace), 90% (push)
+                    _ids = np.where(per >= 0.90)  # 95%
                     _ids = _ids[0][0] if _ids[0].size > 0 else None
                     idx_95 = xs[0][_ids] if _ids is not None else np.inf
                     print('{}: 50/75/95%   @   {}/{}/{}'.format(args.legend[i], idx_50, idx_75, idx_95))
@@ -230,5 +223,5 @@ else:
     legend_name = [directory[i].split('/')[-1] for i in range(len(directory))]
 plt.legend(legend_name, loc='lower right')
 
-plt.savefig(os.path.join('fig_{}.pdf'.format(env_id)), quality=100)
+plt.savefig(os.path.join('fig_ablate_{}.pdf'.format(env_id)), quality=100)
 plt.show()
