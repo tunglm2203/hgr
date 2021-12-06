@@ -1,5 +1,4 @@
-tensorflow==1.12.0
-tensorboard
+tensorflow==1.4
 numpy==1.16.0
 baselines
 scipy
