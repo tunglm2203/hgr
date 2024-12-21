@@ -6,7 +6,7 @@ This is an implementation for **Hindsight Goal Ranking on Replay Buffer for Spar
 
 **Acknowledgement**: This work was supported in part by the Institute for Information & Communications Technology Planning & Evaluation (IITP) grant
 funded by the Korea Government (MSIT) (No. 2019-0-01396, Development of Framework for Analyzing, Detecting, Mitigating of
-Bias in AI Model and Training Data) and in part by the BK21 FOUR program.
+Bias in AI Model and Training Data) and in part by the Institute for Information & communications Technology Promotion (IITP) grant funded by the Korea government (MSIT) (No. 2021-0-01381, Development of Causal AI through Video Understanding) and in part by the BK21 FOUR program.
 
 **Guide**: To run experiments, please follow the instructions in _baselines/baselines/her/README.md_
 
